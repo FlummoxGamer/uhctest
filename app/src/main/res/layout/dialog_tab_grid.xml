@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <ImageButton
+            android:id="@+id/tabsBack"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_back"
+            android:tint="@color/text"
+            android:scaleType="centerInside"
+            android:contentDescription="Back" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:minWidth="44dp"
+            android:gravity="center"
+            android:background="@color/surface_2"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp">
+            <TextView
+                android:id="@+id/tabGridCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0"
+                android:textColor="@color/text"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <ImageButton
+            android:id="@+id/tabsIncognito"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_incognito"
+            android:tint="@color/subtext"
+            android:scaleType="centerInside"
+            android:contentDescription="Incognito tabs" />
+
+        <ImageButton
+            android:id="@+id/tabsGroups"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_grid_view"
+            android:tint="@color/subtext"
+            android:scaleType="centerInside"
+            android:contentDescription="Tab groups" />
+
+        <ImageButton
+            android:id="@+id/tabsMenu"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_menu"
+            android:tint="@color/text"
+            android:scaleType="centerInside"
+            android:contentDescription="Menu" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/tabStrip"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@color/surface"
+        android:visibility="gone"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/tabGrid"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <ImageButton
+            android:id="@+id/tabBottomGrid"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_grid_view"
+            android:tint="@color/text"
+            android:scaleType="centerInside"
+            android:contentDescription="Grid view" />
+
+        <ImageButton
+            android:id="@+id/tabBottomSelect"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_tabs"
+            android:tint="@color/text"
+            android:scaleType="centerInside"
+            android:contentDescription="Select" />
+
+        <ImageButton
+            android:id="@+id/tabBottomNew"
+            android:layout_width="64dp"
+            android:layout_height="44dp"
+            android:background="@color/accent"
+            android:src="@drawable/ic_add"
+            android:tint="@color/bg"
+            android:scaleType="centerInside"
+            android:contentDescription="New tab" />
+
+        <ImageButton
+            android:id="@+id/tabBottomCount"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_tabs"
+            android:tint="@color/text"
+            android:scaleType="centerInside"
+            android:contentDescription="Tab count" />
+
+        <ImageButton
+            android:id="@+id/tabBottomCloseAll"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_close"
+            android:tint="@color/text"
+            android:scaleType="centerInside"
+            android:contentDescription="Close all" />
+    </LinearLayout>
+</LinearLayout>
