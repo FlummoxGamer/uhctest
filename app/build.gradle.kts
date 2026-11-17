@@ -91,13 +91,14 @@ android {
     signingConfigs {
         create("shared") {
             val ks = file("../uh-debug.jks")
-            if (ks.exists()) {
+            val localKs = file("${rootDir}/debug.keystore")
+            if (ks.exists() && ks.length() > 0) {
                 storeFile = ks
                 storePassword = "uhdebug123"
                 keyAlias = "uhdebug"
                 keyPassword = "uhdebug123"
-            } else {
-                storeFile = file("${rootDir}/debug.keystore")
+            } else if (localKs.exists() && localKs.length() > 0) {
+                storeFile = localKs
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
