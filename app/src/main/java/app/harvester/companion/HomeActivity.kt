@@ -8,23 +8,16 @@ import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.zIndex
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.runtime.SideEffect
-import android.graphics.drawable.ColorDrawable
-import android.graphics.Color
-import androidx.compose.material3.Surface
-import androidx.compose.ui.graphics.Color as ComposeColor
-import app.harvester.companion.UHLog
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.fragment.app.FragmentContainerView
 import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
+import app.harvester.companion.browser.BrowserFragment
 import app.harvester.companion.browser.BrowserViewModel
 import app.harvester.companion.browser.toolbar.UhGlobalToolbar
 import app.harvester.companion.theme.UHTheme
@@ -32,7 +25,7 @@ import app.harvester.companion.theme.UHTheme
 class HomeActivity : AppCompatActivity() {
 
     private val browserViewModel: BrowserViewModel by viewModels()
-    private lateinit var navController: NavController
+    private var navControllerState by mutableStateOf<NavController?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -51,67 +44,60 @@ class HomeActivity : AppCompatActivity() {
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
-                        update = { view ->
-                            if (supportFragmentManager.findFragmentById(R.id.nav_host_fragment) == null) {
-                                val navHostFragment = NavHostFragment.create(R.navigation.nav_graph)
-                                supportFragmentManager.beginTransaction()
-                                    .replace(R.id.nav_host_fragment, navHostFragment)
-                                    .setPrimaryNavigationFragment(navHostFragment)
-                                    .commitNow()
-                                navController = navHostFragment.navController
-                                handleIntent(intent)
+                        update = {
+                            try {
+                                val existing = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+                                val host = if (existing == null) {
+                                    val created = NavHostFragment.create(R.navigation.nav_graph)
+                                    supportFragmentManager.beginTransaction()
+                                        .replace(R.id.nav_host_fragment, created)
+                                        .setPrimaryNavigationFragment(created)
+                                        .commitNow()
+                                    created
+                                } else {
+                                    existing
+                                }
+                                val controller = host.navController
+                                if (navControllerState !== controller) {
+                                    navControllerState = controller
+                                    handleIntent(intent, controller)
+                                }
+                            } catch (e: Exception) {
+                                UHLog.throwable("ui_error", "Failed to initialize NavHostFragment/NavController", e)
                             }
                         }
                     )
 
-if (::navController.isInitialized) {
-    UHLog.d("ui_debug", "NavController ready. Showing Address Bar Dialog.")
-    Dialog(
-        onDismissRequest = { },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false
-        )
-    ) {
-        val dialogWindowProvider = LocalView.current.parent as? DialogWindowProvider
-        if (dialogWindowProvider == null) {
-            UHLog.e("ui_error", "Address Bar failed: DialogWindowProvider is null. UI will be invisible.")
-        } else {
-            SideEffect {
-                dialogWindowProvider.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-                dialogWindowProvider.window?.setDimAmount(0f)
-            }
-        }
-        Surface(color = ComposeColor.Transparent, modifier = Modifier.fillMaxSize()) {
-            UhGlobalToolbar(
-                viewModel = browserViewModel,
-                navController = navController,
-                onDismiss = { browserViewModel.exitEditMode() },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-    }
-} else {
-    UHLog.e("ui_error", "Address Bar failed: NavController not initialized yet.")
-}
+                    val controller = navControllerState
+                    if (controller != null) {
+                        UhGlobalToolbar(
+                            viewModel = browserViewModel,
+                            navController = controller,
+                            onDismiss = { browserViewModel.exitEditMode() },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                val controller = navControllerState
                 if (browserViewModel.isEditing.value) {
                     browserViewModel.exitEditMode()
-                } else if (::navController.isInitialized && navController.currentDestination?.id == R.id.browserFragment) {
-                    val currentFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)?.childFragmentManager?.primaryNavigationFragment
-                    if (currentFragment is app.harvester.companion.browser.BrowserFragment) {
-                        if (!currentFragment.onBackPressed()) {
-                            navController.popBackStack()
+                } else if (controller != null && controller.currentDestination?.id == R.id.browserFragment) {
+                    try {
+                        val currentFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)?.childFragmentManager?.primaryNavigationFragment
+                        if (currentFragment is BrowserFragment) {
+                            if (!currentFragment.onBackPressed()) {
+                                controller.popBackStack()
+                            }
+                        } else {
+                            controller.popBackStack()
                         }
-                    } else {
-                        navController.popBackStack()
+                    } catch (e: Exception) {
+                        UHLog.throwable("ui_error", "Failed handling back press in BrowserFragment", e)
                     }
                 } else {
                     isEnabled = false
@@ -122,13 +108,23 @@ if (::navController.isInitialized) {
         })
     }
 
-    private fun handleIntent(intent: Intent?) {
+    private fun handleIntent(intent: Intent?, controller: NavController? = navControllerState) {
         val url = intent?.data?.toString() ?: return
-        if (url.startsWith("http")) {
-            if (::navController.isInitialized && navController.currentDestination?.id == R.id.homeFragment) {
+        if (!url.startsWith("http")) {
+            UHLog.w("ui_warn", "Ignored non-http intent URL: $url")
+            return
+        }
+        if (controller == null) {
+            UHLog.w("ui_warn", "Cannot handle intent URL before NavController is ready: $url")
+            return
+        }
+        try {
+            if (controller.currentDestination?.id == R.id.homeFragment) {
                 val bundle = Bundle().apply { putString("url", url) }
-                navController.navigate(R.id.action_homeFragment_to_browserFragment, bundle)
+                controller.navigate(R.id.action_homeFragment_to_browserFragment, bundle)
             }
+        } catch (e: Exception) {
+            UHLog.throwable("ui_error", "Failed to navigate for intent URL: $url", e)
         }
     }
 

@@ -1,12 +1,12 @@
 package app.harvester.companion.home
 
-import androidx.compose.runtime.LaunchedEffect
 import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import app.harvester.companion.UHLog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -145,46 +145,52 @@ fun HomeScreen(
                                 iconUrl = shortcut.iconUrl,
                                 textColor = textColor,
                                 shadowColor = shadowColor,
-                                onOpen = { onShortcutOpen(shortcut.url) },
-                                onEdit = { shortcutToEdit = shortcut },
-                                onRemove = { onRemoveShortcut(shortcut) },
-                                onShowPopup = { popupForShortcut = shortcut },
                                 modifier = Modifier.draggableHandle(
                                     dragGestureDetector = DragGestureDetector.Compose { onDragStart, onDragEnd, onDragCancel, onDrag ->
                                         coroutineScope {
                                             awaitEachGesture {
                                                 val down = awaitFirstDown(requireUnconsumed = false)
+                                                val downTimeMs = System.currentTimeMillis()
                                                 var isDragReady = false
                                                 var isPopupShowing = false
                                                 var isDragging = false
+                                                var movedPastSlop = false
                                                 var offset = Offset.Zero
 
-                                                var isHolding = false
-
-val dragJob = launch {
-    delay(150)
-    isDragReady = true
-}
-val popupJob = launch {
-    delay(600)
-    if (!isDragging && !isPopupShowing && offset.getDistance() < 20f) {
-        isPopupShowing = true
-        isHolding = true
-        UHLog.d("ui_debug", "Widget popup triggered by 600ms hold.")
-        popupForShortcut = shortcut
-    }
-}
+                                                val dragJob = launch {
+                                                    delay(150)
+                                                    isDragReady = true
+                                                }
+                                                val popupJob = launch {
+                                                    delay(600)
+                                                    if (!isDragging && !isPopupShowing && !movedPastSlop) {
+                                                        isPopupShowing = true
+                                                        popupForShortcut = shortcut
+                                                    }
+                                                }
 
                                                 while (true) {
                                                     val event = awaitPointerEvent()
                                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                                    if (!change.pressed) break
+                                                    if (!change.pressed || change.changedToUpIgnoreConsumed()) {
+                                                        val heldMs = System.currentTimeMillis() - downTimeMs
+                                                        if (!isDragging && !isPopupShowing && !movedPastSlop && heldMs < 100L) {
+                                                            if (shortcut.url.isBlank()) {
+                                                                UHLog.w("ui_warn", "Shortcut tap ignored: blank URL for '${shortcut.name}'.")
+                                                            } else {
+                                                                onShortcutOpen(shortcut.url)
+                                                            }
+                                                        }
+                                                        change.consume()
+                                                        break
+                                                    }
                                                     if (isPopupShowing) break
 
                                                     val delta = change.positionChange()
                                                     offset += delta
 
                                                     if (offset.getDistance() > 20f) {
+                                                        movedPastSlop = true
                                                         popupJob.cancel()
                                                         if (isDragReady && !isDragging) {
                                                             isDragging = true
@@ -258,28 +264,11 @@ private fun ShortcutItem(
     iconUrl: String,
     textColor: Color,
     shadowColor: Color,
-    onOpen: () -> Unit,
-    onEdit: () -> Unit,
-    onRemove: () -> Unit,
-    onShowPopup: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var wasHold by remember { mutableStateOf(false) }
-
-    LaunchedEffect(onShowPopup) {
-        wasHold = true
-        delay(1000)
-        wasHold = false
-    }
-
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.clickable(
-            interactionSource = remember { MutableInteractionSource() },
-            indication = null
-        ) { 
-            if (!wasHold) onOpen() else UHLog.d("ui_debug", "Click blocked: widget was held.")
-        }
+        modifier = modifier
     ) {
         Box(
             modifier = Modifier
@@ -338,7 +327,10 @@ private fun AddShortcutItem(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable { onClick() }
+        modifier = Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+        ) { onClick() }
     ) {
         Box(
             modifier = Modifier

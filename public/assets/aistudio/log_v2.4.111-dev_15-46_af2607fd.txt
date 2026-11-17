@@ -1,0 +1,16 @@
+15:45:28.623 [boot] Harvester 2.4.111-dev (code 181)
+15:45:28.627 [boot] Android 10 · SDK 29
+15:45:28.631 [boot] Device OPPO RMX1801
+15:45:28.633 [boot] session=20261117_154528
+15:45:29.008 [perf] App onCreate: 520ms
+15:45:30.684 [ui_error] ERROR: Address Bar failed: NavController not initialized yet.
+15:45:44.977 [ui_debug] Widget popup triggered by 600ms hold.
+15:45:46.127 [perf] Browser engine view created: 22ms
+15:45:46.187 [web_debug] Loading initial URL: https://m.youtube.com
+15:45:49.594 [ui_debug] Widget popup triggered by 600ms hold.
+15:45:50.321 [perf] Browser engine view created: 6ms
+15:45:50.326 [web_debug] Loading initial URL: https://m.youtube.com
+15:45:50.492 [web] Page loaded: https://m.youtube.com
+15:45:52.890 [ui_debug] Widget popup triggered by 600ms hold.
+15:45:59.830 [ui_debug] Widget popup triggered by 600ms hold.
+15:46:19.707 [session] stopped events=0

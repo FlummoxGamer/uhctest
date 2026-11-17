@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import app.harvester.companion.R
+import app.harvester.companion.UHLog
 
 @Composable
 fun ShortcutIcon(iconUrl: String, modifier: Modifier = Modifier) {
@@ -33,6 +34,9 @@ fun ShortcutIcon(iconUrl: String, modifier: Modifier = Modifier) {
             contentDescription = null,
             contentScale = ContentScale.Fit,
             modifier = modifier.padding(6.dp),
+            onError = { result ->
+                UHLog.w("ui_warn", "Shortcut icon failed to load ($iconUrl): ${result.result.throwable.message}")
+            },
             loading = {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_globe),

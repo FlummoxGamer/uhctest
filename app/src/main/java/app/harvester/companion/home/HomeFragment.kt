@@ -14,6 +14,7 @@ import androidx.fragment.app.viewModels
 import androidx.navigation.fragment.findNavController
 import app.harvester.companion.CustomizeHomeActivity
 import app.harvester.companion.R
+import app.harvester.companion.UHLog
 import app.harvester.companion.browser.BrowserViewModel
 import app.harvester.companion.theme.UHTheme
 
@@ -40,11 +41,19 @@ class HomeFragment : Fragment() {
                     isVideo = isVideo,
                     textColorInt = textColor,
                     onEditHomeClick = {
-                        startActivity(Intent(requireContext(), CustomizeHomeActivity::class.java))
+                        try {
+                            startActivity(Intent(requireContext(), CustomizeHomeActivity::class.java))
+                        } catch (e: Exception) {
+                            UHLog.throwable("ui_error", "Failed to open CustomizeHomeActivity", e)
+                        }
                     },
                     onShortcutOpen = { url ->
-                        val bundle = Bundle().apply { putString("url", url) }
-                        findNavController().navigate(R.id.action_homeFragment_to_browserFragment, bundle)
+                        try {
+                            val bundle = Bundle().apply { putString("url", url) }
+                            findNavController().navigate(R.id.action_homeFragment_to_browserFragment, bundle)
+                        } catch (e: Exception) {
+                            UHLog.throwable("ui_error", "Failed to navigate to BrowserFragment for shortcut: $url", e)
+                        }
                     },
                     onMoveShortcut = { from, to -> homeViewModel.moveShortcut(from, to) },
                     onAddShortcut = { homeViewModel.addShortcut(it) },
@@ -57,7 +66,6 @@ class HomeFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        browserViewModel.isEditing.value
         homeViewModel.refresh()
     }
 }

@@ -4,6 +4,8 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -18,6 +20,7 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import app.harvester.companion.R
 import app.harvester.companion.UHApp
+import app.harvester.companion.UHLog
 import app.harvester.companion.browser.BrowserViewModel
 import app.harvester.companion.browser.menu.MainMenuDialogFragment
 import app.harvester.companion.browser.search.UHSearchEnginePicker
@@ -44,19 +47,78 @@ fun UhGlobalToolbar(
     val searchViewModel: UhSearchViewModel = viewModel()
     var showSearchEnginePicker by remember { mutableStateOf(false) }
 
-    val currentDestination = navController.currentBackStackEntryAsState().value?.destination
-    val isBrowser = currentDestination?.id == R.id.browserFragment
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentDestinationId = backStackEntry?.destination?.id
+    val isHome = currentDestinationId == R.id.homeFragment || currentDestinationId == null
+    val isBrowser = currentDestinationId == R.id.browserFragment
+
+    if (!isHome && !isBrowser && !isEditing) {
+        return
+    }
+
+    val displayUrl = if (isBrowser) (selectedTab?.content?.url ?: "") else ""
+    val iconState = if (isBrowser) {
+        val currentUrl = selectedTab?.content?.url ?: ""
+        when {
+            currentUrl.startsWith("https://") -> 1
+            currentUrl.startsWith("http://") -> 2
+            else -> 0
+        }
+    } else {
+        0
+    }
+
+    val openTrustPanel = {
+        val activity = context as? AppCompatActivity
+        val tab = components.store.state.selectedTab
+        if (activity == null) {
+            UHLog.e("ui_error", "Cannot open TrustPanel: Context is not AppCompatActivity.")
+        } else if (tab == null) {
+            UHLog.w("ui_warn", "Cannot open TrustPanel: No active tab selected.")
+        } else {
+            try {
+                TrustPanelFragment.newInstance(
+                    sessionId = tab.id,
+                    url = tab.content.url,
+                    title = tab.content.title ?: "",
+                    isSecured = tab.content.securityInfo.isSecure,
+                    certificate = tab.content.securityInfo.certificate
+                ).show(activity.supportFragmentManager, "TrustPanel")
+            } catch (e: Exception) {
+                UHLog.throwable("ui_error", "Failed to show TrustPanel", e)
+            }
+        }
+    }
+
+    val openMainMenu = {
+        val activity = context as? AppCompatActivity
+        if (activity == null) {
+            UHLog.e("ui_error", "Cannot open MainMenu: Context is not AppCompatActivity.")
+        } else {
+            try {
+                MainMenuDialogFragment.newInstance(!isBrowser).show(activity.supportFragmentManager, "MainMenu")
+            } catch (e: Exception) {
+                UHLog.throwable("ui_error", "Failed to show MainMenu", e)
+            }
+        }
+    }
 
     val onSearchSubmit = { query: String ->
         val target = viewModel.normalize(query)
-        if (target.isNotBlank()) {
-            if (isBrowser) {
-                components.useCases.sessionUseCases.loadUrl(target)
-            } else {
-                val bundle = Bundle().apply { putString("url", target) }
-                navController.navigate(R.id.action_homeFragment_to_browserFragment, bundle)
+        if (target.isBlank()) {
+            UHLog.w("ui_warn", "Search submit ignored: normalized URL is blank for query.")
+        } else {
+            try {
+                if (isBrowser) {
+                    components.useCases.sessionUseCases.loadUrl(target)
+                } else {
+                    val bundle = Bundle().apply { putString("url", target) }
+                    navController.navigate(R.id.action_homeFragment_to_browserFragment, bundle)
+                }
+                viewModel.exitEditMode()
+            } catch (e: Exception) {
+                UHLog.throwable("ui_error", "Failed to submit address bar query", e)
             }
-            viewModel.exitEditMode()
         }
     }
 
@@ -66,93 +128,71 @@ fun UhGlobalToolbar(
                 viewModel = searchViewModel,
                 isBarBottom = isBarBottom,
                 addressBarContent = {
-                UHAddressBar(
-                    url = selectedTab?.content?.url ?: "",
-                    isEditing = true,
-                    tabCount = browserState.tabs.size,
-                    iconState = if (selectedTab?.content?.url?.startsWith("https") == true) 1 else 0,
-                    isWallpaperActive = false,
-                    editText = editText,
-                    onEditTextChanged = { 
-                        viewModel.onTextChanged(it)
-                        searchViewModel.onQueryChanged(it, isBarBottom)
-                    },
-                    onSubmit = onSearchSubmit,
-                    onEditStart = { },
-                    onClear = { 
-                        viewModel.onTextChanged("")
-                        searchViewModel.clearQuery(isBarBottom)
-                    },
-                    onSearchEngineClick = { showSearchEnginePicker = true },
-                    onLockClick = {
-                        val tab = components.store.state.selectedTab
-                        if (tab != null) {
-                            TrustPanelFragment.newInstance(
-                                sessionId = tab.id,
-                                url = tab.content.url,
-                                title = tab.content.title ?: "",
-                                isSecured = tab.content.securityInfo.isSecure,
-                                certificate = tab.content.securityInfo.certificate
-                            ).show((context as AppCompatActivity).supportFragmentManager, "TrustPanel")
-                        }
-                    },
-                    onScriptMenuClick = {},
-                    onMenuClick = { 
-                        MainMenuDialogFragment.newInstance(!isBrowser).show((context as AppCompatActivity).supportFragmentManager, "MainMenu")
-                    },
-                    onTabCountClick = {},
-                    searchEngine = searchEngine
-                )
-            },
-            onDismiss = { viewModel.exitEditMode() },
-            onSubmit = onSearchSubmit
-        )
-}     else {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = if (isBarBottom) Alignment.BottomCenter else Alignment.TopCenter
-         ) {
-            UHAddressBar(
-                url = selectedTab?.content?.url ?: "",
-                isEditing = isEditing,
-                tabCount = browserState.tabs.size,
-                iconState = if (selectedTab?.content?.url?.startsWith("https") == true) 1 else 0,
-                isWallpaperActive = currentDestination?.id == R.id.homeFragment,
-                editText = editText,
-                onEditTextChanged = { viewModel.onTextChanged(it) },
-                onSubmit = onSearchSubmit,
-                onEditStart = { viewModel.enterEditMode("") },
-                onClear = { },
-                onSearchEngineClick = { showSearchEnginePicker = true },
-                onLockClick = {
-                    val tab = components.store.state.selectedTab
-                    if (tab != null) {
-                        TrustPanelFragment.newInstance(
-                            sessionId = tab.id,
-                            url = tab.content.url,
-                            title = tab.content.title ?: "",
-                            isSecured = tab.content.securityInfo.isSecure,
-                            certificate = tab.content.securityInfo.certificate
-                        ).show((context as AppCompatActivity).supportFragmentManager, "TrustPanel")
-                    }
+                    UHAddressBar(
+                        url = displayUrl,
+                        isEditing = true,
+                        tabCount = browserState.tabs.size,
+                        iconState = iconState,
+                        isWallpaperActive = false,
+                        editText = editText,
+                        onEditTextChanged = {
+                            viewModel.onTextChanged(it)
+                            searchViewModel.onQueryChanged(it, isBarBottom)
+                        },
+                        onSubmit = onSearchSubmit,
+                        onEditStart = { },
+                        onClear = {
+                            viewModel.onTextChanged("")
+                            searchViewModel.clearQuery(isBarBottom)
+                        },
+                        onSearchEngineClick = { showSearchEnginePicker = true },
+                        onLockClick = openTrustPanel,
+                        onScriptMenuClick = {},
+                        onMenuClick = openMainMenu,
+                        onTabCountClick = {},
+                        searchEngine = searchEngine
+                    )
                 },
-                onScriptMenuClick = {},
-                onMenuClick = { 
-                    MainMenuDialogFragment.newInstance(!isBrowser).show((context as AppCompatActivity).supportFragmentManager, "MainMenu")
-                },
-                onTabCountClick = {},
-                searchEngine = searchEngine
+                onDismiss = onDismiss,
+                onSubmit = onSearchSubmit
             )
+        } else {
+            val barPositionModifier = if (isBarBottom) {
+                Modifier.navigationBarsPadding()
+            } else {
+                Modifier.statusBarsPadding()
+            }
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = if (isBarBottom) Alignment.BottomCenter else Alignment.TopCenter
+            ) {
+                UHAddressBar(
+                    url = displayUrl,
+                    isEditing = false,
+                    tabCount = browserState.tabs.size,
+                    iconState = iconState,
+                    isWallpaperActive = isHome,
+                    editText = editText,
+                    onEditTextChanged = { viewModel.onTextChanged(it) },
+                    onSubmit = onSearchSubmit,
+                    onEditStart = { viewModel.enterEditMode("") },
+                    onClear = { },
+                    onSearchEngineClick = { showSearchEnginePicker = true },
+                    onLockClick = openTrustPanel,
+                    onScriptMenuClick = {},
+                    onMenuClick = openMainMenu,
+                    onTabCountClick = {},
+                    searchEngine = searchEngine,
+                    modifier = barPositionModifier
+                )
+            }
         }
     }
-}
 
-if (showSearchEnginePicker) {
+    if (showSearchEnginePicker) {
         UHSearchEnginePicker(
             onDismiss = { showSearchEnginePicker = false },
-            onSelect = { 
-                showSearchEnginePicker = false
-            }
+            onSelect = { showSearchEnginePicker = false }
         )
     }
 }
