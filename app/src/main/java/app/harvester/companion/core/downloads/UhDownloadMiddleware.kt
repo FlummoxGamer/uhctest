@@ -90,7 +90,21 @@ class UhDownloadMiddleware(
         }
     }
 
+    private fun downloadExists(download: DownloadState): Boolean {
+        return if (download.directoryPath.startsWith("content://")) {
+            DownloadLocationResolver.safFileExists(applicationContext, download.directoryPath, download.fileName)
+        } else {
+            downloadFileUtils.fileExists(directoryPath = download.directoryPath, fileName = download.fileName)
+        }
+    }
+
     private fun removeFileFromStorage(download: DownloadState) {
+        if (download.directoryPath.startsWith("content://")) {
+            if (!DownloadLocationResolver.deleteSafFile(applicationContext, download.directoryPath, download.fileName)) {
+                app.harvester.companion.UHLog.w("download_warn", "Failed to delete SAF download file: ${download.fileName}")
+            }
+            return
+        }
         val fileExists = downloadFileUtils.fileExists(directoryPath = download.directoryPath, fileName = download.fileName)
         if (!fileExists) return
         downloadFileUtils.deleteMediaFile(
@@ -117,14 +131,14 @@ class UhDownloadMiddleware(
         downloadStorage.getDownloadsList()
             .filter {
                 (it.status == DownloadState.Status.COMPLETED || it.status == DownloadState.Status.CANCELLED) &&
-                    !downloadFileUtils.fileExists(directoryPath = it.directoryPath, fileName = it.fileName)
+                    !downloadExists(it)
             }
             .forEach { download -> store.dispatch(DownloadAction.RemoveDownloadAction(download.id)) }
     }
 
     private fun restoreDownloads(store: Store<BrowserState, BrowserAction>) = scope.launch {
         downloadStorage.getDownloadsList().forEach { download ->
-            if (!downloadFileUtils.fileExists(directoryPath = download.directoryPath, fileName = download.fileName) && 
+            if (!downloadExists(download) &&
                 download.status != DownloadState.Status.DOWNLOADING) {
                 downloadStorage.remove(download)
             } else if (!store.state.downloads.containsKey(download.id) && !download.private) {
@@ -150,7 +164,11 @@ class UhDownloadMiddleware(
         if (download.status !in arrayOf(DownloadState.Status.COMPLETED, DownloadState.Status.CANCELLED, DownloadState.Status.FAILED)) {
             val intent = Intent(applicationContext, downloadServiceClass)
             intent.putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, download.id)
-            ContextCompat.startForegroundService(applicationContext, intent)
+            try {
+                ContextCompat.startForegroundService(applicationContext, intent)
+            } catch (e: Exception) {
+                app.harvester.companion.UHLog.throwable("download_warn", "Unable to start foreground download service for ${download.id}", e)
+            }
         }
     }
 

@@ -2,6 +2,9 @@ package app.harvester.companion
 
 import android.content.Context
 import androidx.appcompat.app.AppCompatDelegate
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 object ThemePrefs {
 
@@ -12,19 +15,24 @@ object ThemePrefs {
     const val MODE_LIGHT = 1
     const val MODE_DARK = 2
 
-    private fun prefs(ctx: Context) = ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+    private val _modeFlow = MutableStateFlow<Int?>(null)
+
+    private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
     fun getMode(ctx: Context): Int = prefs(ctx).getInt(KEY_MODE, MODE_SYSTEM)
 
+    fun modeFlow(ctx: Context): StateFlow<Int> {
+        if (_modeFlow.value == null) {
+            _modeFlow.value = getMode(ctx)
+        }
+        @Suppress("UNCHECKED_CAST")
+        return _modeFlow.asStateFlow() as StateFlow<Int>
+    }
+
     fun setMode(ctx: Context, mode: Int) {
         prefs(ctx).edit().putInt(KEY_MODE, mode).apply()
+        _modeFlow.value = mode
         apply(mode)
-        val isDark = when (mode) {
-            MODE_DARK -> true
-            MODE_LIGHT -> false
-            else -> (ctx.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-        }
-       
     }
 
     fun apply(mode: Int) {
@@ -35,5 +43,9 @@ object ThemePrefs {
         })
     }
 
-    fun applyCurrent(ctx: Context) = apply(getMode(ctx))
+    fun applyCurrent(ctx: Context) {
+        val mode = getMode(ctx)
+        _modeFlow.value = mode
+        apply(mode)
+    }
 }

@@ -17,30 +17,31 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import app.harvester.companion.R
 import app.harvester.companion.SearchEnginePrefs
+import coil.compose.AsyncImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UHSearchEnginePicker(onDismiss: () -> Unit, onSelect: () -> Unit) {
     val context = LocalContext.current
-    val current = SearchEnginePrefs.getEngine(context)
+    val currentEntry by SearchEnginePrefs.activeEngineFlow(context).collectAsState()
+    val current = currentEntry.id
     val engines = SearchEnginePrefs.all(context)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = colorResource(id = R.color.surface_2),
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Column(
             modifier = Modifier
@@ -50,11 +51,11 @@ fun UHSearchEnginePicker(onDismiss: () -> Unit, onSelect: () -> Unit) {
         ) {
             Text(
                 text = "Search Engine",
-                color = colorResource(id = R.color.text),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 20.sp,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
-            
+
             LazyColumn {
                 items(engines, key = { it.id }) { entry ->
                     Row(
@@ -62,7 +63,7 @@ fun UHSearchEnginePicker(onDismiss: () -> Unit, onSelect: () -> Unit) {
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(if (entry.id == current) colorResource(id = R.color.surface_3) else Color.Transparent)
+                            .background(if (entry.id == current) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
                             .clickable {
                                 SearchEnginePrefs.setEngine(context, entry.id)
                                 onSelect()
@@ -78,7 +79,7 @@ fun UHSearchEnginePicker(onDismiss: () -> Unit, onSelect: () -> Unit) {
                         )
                         Text(
                             text = entry.name,
-                            color = if (entry.id == current) colorResource(id = R.color.accent) else colorResource(id = R.color.text),
+                            color = if (entry.id == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(start = 16.dp).weight(1f)
                         )

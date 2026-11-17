@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.input.placeCursorAtEnd
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -35,7 +35,7 @@ fun UhDownloadSearchBar(
 ) {
     val focusRequester = remember { FocusRequester() }
     val textState = rememberTextFieldState(query)
-    
+
     LaunchedEffect(query) {
         if (textState.text.toString() != query) {
             textState.edit {
@@ -48,7 +48,7 @@ fun UhDownloadSearchBar(
     LaunchedEffect(textState.text) {
         onQueryChanged(textState.text.toString())
     }
-    
+
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
@@ -56,7 +56,7 @@ fun UhDownloadSearchBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(colorResource(id = R.color.surface))
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -64,40 +64,40 @@ fun UhDownloadSearchBar(
             Icon(
                 painter = painterResource(id = R.drawable.ic_back),
                 contentDescription = "Close Search",
-                tint = colorResource(id = R.color.text)
+                tint = MaterialTheme.colorScheme.onSurface
             )
         }
-        
+
         Box(
             modifier = Modifier
                 .weight(1f)
-                .background(colorResource(id = R.color.surface_2), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             contentAlignment = Alignment.CenterStart
         ) {
             if (textState.text.isEmpty()) {
-                Text("Search downloads", color = colorResource(id = R.color.subtext), fontSize = 14.sp)
+                Text("Search downloads", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             }
             BasicTextField(
                 state = textState,
-                textStyle = TextStyle(color = colorResource(id = R.color.text), fontSize = 14.sp),
-                cursorBrush = SolidColor(colorResource(id = R.color.accent)),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
             )
         }
 
         if (textState.text.isNotEmpty()) {
-            IconButton(onClick = { 
+            IconButton(onClick = {
                 textState.edit {
                     replace(0, length, "")
                     placeCursorAtEnd()
                 }
-                onQueryChanged("") 
+                onQueryChanged("")
             }) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_close),
                     contentDescription = "Clear Search",
-                    tint = colorResource(id = R.color.subtext),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
                 )
             }

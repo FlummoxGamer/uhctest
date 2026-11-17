@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -30,11 +31,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NavOptions
+import androidx.navigation.fragment.NavHostFragment
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
@@ -42,6 +44,7 @@ import app.harvester.companion.R
 import app.harvester.companion.ScriptsActivity
 import app.harvester.companion.SettingsActivity
 import app.harvester.companion.UHApp
+import app.harvester.companion.UHLog
 import app.harvester.companion.theme.UHTheme
 import mozilla.components.browser.state.selector.selectedTab
 import com.google.android.material.R as materialR
@@ -73,6 +76,23 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
         }
     }
 
+    private fun navigateSafe(destinationId: Int) {
+        val navHostFragment = requireActivity().supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+        val controller = navHostFragment?.navController
+        if (controller == null) {
+            UHLog.e("ui_error", "MainMenu failed to navigate: NavController not found.")
+            return
+        }
+        try {
+            val options = NavOptions.Builder()
+                .setLaunchSingleTop(true)
+                .build()
+            controller.navigate(destinationId, null, options)
+        } catch (e: Exception) {
+            UHLog.throwable("ui_error", "MainMenu navigation failed for destination $destinationId", e)
+        }
+    }
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val isHome = arguments?.getBoolean(ARG_IS_HOME) ?: true
         val components = (requireActivity().application as UHApp).components
@@ -86,7 +106,7 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(colorResource(R.color.surface_3), RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
@@ -94,51 +114,43 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                             modifier = Modifier
                                 .size(36.dp, 4.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(colorResource(R.color.subtext))
+                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
                                 .align(Alignment.CenterHorizontally)
                         )
 
-Row(
-    modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.spacedBy(8.dp)
-) {
-    key("fav") {
-        TopRowItem("Favorites", R.drawable.ic_favorites, Modifier.weight(1f)) {
-            dismiss()
-        }
-    }
-    key("history") {
-TopRowItem("History", R.drawable.ic_history, Modifier.weight(1f)) {
-    dismiss()
-    val navHostFragment = requireActivity().supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? androidx.navigation.fragment.NavHostFragment
-    val options = androidx.navigation.NavOptions.Builder()
-        .setLaunchSingleTop(true)
-        .setRestoreState(true)
-        .build()
-    navHostFragment?.navController?.navigate(R.id.historyFragment, null, options)
-}
-TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
-    dismiss()
-    val navHostFragment = requireActivity().supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? androidx.navigation.fragment.NavHostFragment
-    val options = androidx.navigation.NavOptions.Builder()
-        .setLaunchSingleTop(true)
-        .setRestoreState(true)
-        .build()
-    navHostFragment?.navController?.navigate(R.id.action_global_downloadsFragment, null, options)
-}
-    }
-    key("playlist") {
-        TopRowItem("Playlist", R.drawable.ic_playlist, Modifier.weight(1f)) {
-            dismiss()
-        }
-    }
-}
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            key("fav") {
+                                TopRowItem("Favorites", R.drawable.ic_favorites, Modifier.weight(1f)) {
+                                    dismiss()
+                                }
+                            }
+                            key("history") {
+                                TopRowItem("History", R.drawable.ic_history, Modifier.weight(1f)) {
+                                    dismiss()
+                                    navigateSafe(R.id.historyFragment)
+                                }
+                            }
+                            key("downloads") {
+                                TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
+                                    dismiss()
+                                    navigateSafe(R.id.action_global_downloadsFragment)
+                                }
+                            }
+                            key("playlist") {
+                                TopRowItem("Playlist", R.drawable.ic_playlist, Modifier.weight(1f)) {
+                                    dismiss()
+                                }
+                            }
+                        }
 
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(24.dp))
-                                .background(colorResource(R.color.surface))
+                                .background(MaterialTheme.colorScheme.surface)
                                 .padding(vertical = 8.dp)
                         ) {
                             if (!isHome) {
@@ -151,17 +163,17 @@ TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
                                     dismiss()
                                     selectedTab?.let { tab ->
                                         components.useCases.sessionUseCases.requestDesktopSite(!isDesktopMode, tab.id)
-                                    }
+                                    } ?: UHLog.w("ui_warn", "Request desktop site clicked with no active tab.")
                                 }
                                 MenuRowItem(R.drawable.ic_menu_add_home, "Add to Home Screen") { dismiss() }
                                 MenuRowItem(R.drawable.ic_menu_dev, "Developer Tools") { dismiss() }
-                                
+
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 16.dp, vertical = 8.dp)
                                         .height(1.dp)
-                                        .background(colorResource(R.color.border))
+                                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                                 )
                             }
 
@@ -175,21 +187,42 @@ TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(32.dp))
-                                .background(colorResource(R.color.surface))
+                                .background(MaterialTheme.colorScheme.surface)
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            BottomBarItem("Home", R.drawable.ic_home) { dismiss() }
+                            BottomBarItem("Home", R.drawable.ic_home) {
+                                dismiss()
+                                val navHostFragment = requireActivity().supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+                                val controller = navHostFragment?.navController
+                                if (controller == null) {
+                                    UHLog.w("ui_warn", "Home clicked but NavController is unavailable.")
+                                } else if (!controller.popBackStack(R.id.homeFragment, false)) {
+                                    try {
+                                        controller.navigate(R.id.homeFragment)
+                                    } catch (e: Exception) {
+                                        UHLog.throwable("ui_error", "Failed navigating to homeFragment", e)
+                                    }
+                                }
+                            }
                             BottomBarItem("Add", R.drawable.ic_heart_plus) { dismiss() }
                             BottomBarItem("Quit", R.drawable.ic_power) { dismiss(); requireActivity().finish() }
                             BottomBarItem("Scripts", R.drawable.ic_code) {
                                 dismiss()
                                 startActivity(Intent(requireContext(), ScriptsActivity::class.java))
                             }
-                            BottomBarItem("Reload", R.drawable.ic_reload) { dismiss() }
+                            BottomBarItem("Reload", R.drawable.ic_reload) {
+                                dismiss()
+                                val tab = selectedTab ?: components.store.state.selectedTab
+                                if (tab != null) {
+                                    components.useCases.sessionUseCases.reload(tab.id)
+                                } else {
+                                    UHLog.w("ui_warn", "Reload clicked in MainMenu with no active tab.")
+                                }
+                            }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
@@ -202,7 +235,7 @@ TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
         Column(
             modifier = modifier
                 .clip(RoundedCornerShape(16.dp))
-                .background(colorResource(R.color.surface_2))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
                 .clickable { onClick() }
                 .padding(vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -210,13 +243,13 @@ TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = label,
-                tint = colorResource(R.color.accent),
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = label,
-                color = colorResource(R.color.text),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -236,13 +269,13 @@ TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = label,
-                tint = colorResource(R.color.subtext),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = label,
-                color = colorResource(R.color.text),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 16.sp,
                 modifier = Modifier.weight(1f)
             )
@@ -261,7 +294,7 @@ TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = label,
-                tint = colorResource(R.color.text),
+                tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(24.dp)
             )
         }

@@ -1,8 +1,9 @@
 package app.harvester.companion.settings
 
+import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,10 +15,12 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,11 +28,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.harvester.companion.R
+import androidx.core.view.WindowCompat
 import app.harvester.companion.SearchEnginePrefs
 import app.harvester.companion.SettingsPrefs
 import app.harvester.companion.browser.search.UHSearchEnginePicker
@@ -38,9 +40,12 @@ import app.harvester.companion.settings.components.SettingsRow
 import app.harvester.companion.settings.components.SettingsSwitchRow
 import app.harvester.companion.theme.UHTheme
 
-class UHSearchSettingsActivity : ComponentActivity() {
+class UHSearchSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
         setContent {
             UHTheme {
                 SearchSettingsScreen()
@@ -54,21 +59,21 @@ fun SearchSettingsScreen() {
     val context = LocalContext.current
     var showEnginePicker by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
-    var engineName by remember { mutableStateOf(SearchEnginePrefs.getLabel(context)) }
-    
+    val activeEngine by SearchEnginePrefs.activeEngineFlow(context).collectAsState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(colorResource(id = R.color.bg))
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
-     ) {
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "Search",
-                color = colorResource(id = R.color.text),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -77,10 +82,7 @@ fun SearchSettingsScreen() {
         if (showEnginePicker) {
             UHSearchEnginePicker(
                 onDismiss = { showEnginePicker = false },
-                onSelect = { 
-                    showEnginePicker = false
-                    engineName = SearchEnginePrefs.getLabel(context)
-                }
+                onSelect = { showEnginePicker = false }
             )
         }
 
@@ -88,9 +90,7 @@ fun SearchSettingsScreen() {
             AddCustomEngineDialog(
                 onDismiss = { showAddDialog = false },
                 onAdd = { name, url ->
-                    if (SearchEnginePrefs.addCustom(context, name, url)) {
-                        engineName = SearchEnginePrefs.getLabel(context)
-                    }
+                    SearchEnginePrefs.addCustom(context, name, url)
                     showAddDialog = false
                 }
             )
@@ -100,9 +100,9 @@ fun SearchSettingsScreen() {
             modifier = Modifier
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding()
-         ) {
+        ) {
             item(key = "cat_search") { SettingsCategory("Search Engine") }
-            item(key = "row_default_engine") { SettingsRow("Default Search Engine", engineName, onClick = { showEnginePicker = true }) }
+            item(key = "row_default_engine") { SettingsRow("Default Search Engine", activeEngine.name, onClick = { showEnginePicker = true }) }
             item(key = "row_add_engine") { SettingsRow("Add Custom Engine", "Create your own search engine", onClick = { showAddDialog = true }) }
 
             item(key = "cat_suggestions") { SettingsCategory("Suggestions") }
@@ -124,10 +124,10 @@ fun SearchSettingsScreen() {
 fun AddCustomEngineDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Custom Engine") },
+        title = { Text("Add Custom Engine", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column {
                 OutlinedTextField(
@@ -146,15 +146,15 @@ fun AddCustomEngineDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit
         },
         confirmButton = {
             TextButton(onClick = { onAdd(name, url) }) {
-                Text("Add", color = colorResource(id = R.color.accent))
+                Text("Add", color = MaterialTheme.colorScheme.primary)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = colorResource(id = R.color.subtext))
+                Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
-        containerColor = colorResource(id = R.color.surface_2),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(16.dp)
     )
 }

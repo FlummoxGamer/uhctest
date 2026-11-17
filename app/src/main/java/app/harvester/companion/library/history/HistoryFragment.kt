@@ -5,13 +5,18 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.core.os.bundleOf
+import androidx.navigation.NavOptions
+import androidx.navigation.fragment.findNavController
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -60,14 +65,43 @@ class HistoryFragment : Fragment() {
         savedInstanceState: Bundle?
     ): View = content {
         UHTheme {
-            HistoryScreen()
+            HistoryScreen(
+                onNavigateBack = {
+                    try {
+                        if (!findNavController().popBackStack()) {
+                            activity?.onBackPressedDispatcher?.onBackPressed()
+                        }
+                    } catch (e: Exception) {
+                        UHLog.throwable("ui_error", "Failed navigating back from HistoryFragment", e)
+                        activity?.onBackPressedDispatcher?.onBackPressed()
+                    }
+                },
+                onOpenUrl = { url ->
+                    val components = (requireContext().applicationContext as UHApp).components
+                    components.useCases.sessionUseCases.loadUrl(url)
+                    try {
+                        val navController = findNavController()
+                        if (!navController.popBackStack(R.id.browserFragment, false)) {
+                            val options = NavOptions.Builder()
+                                .setPopUpTo(R.id.historyFragment, true)
+                                .build()
+                            navController.navigate(R.id.browserFragment, bundleOf("url" to url), options)
+                        }
+                    } catch (e: Exception) {
+                        UHLog.throwable("ui_error", "Failed navigating from History to browser for $url", e)
+                    }
+                }
+            )
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen() {
+fun HistoryScreen(
+    onNavigateBack: () -> Unit,
+    onOpenUrl: (String) -> Unit
+) {
     val context = LocalContext.current
     val components = (context.applicationContext as UHApp).components
     var historyItems by remember { mutableStateOf<List<VisitInfo>>(emptyList()) }
@@ -94,7 +128,7 @@ fun HistoryScreen() {
             TopAppBar(
                 title = { Text("History", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { (context as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() }) {
+                    IconButton(onClick = onNavigateBack) {
                         Icon(painterResource(R.drawable.ic_back), contentDescription = "Back")
                     }
                 },
@@ -122,41 +156,41 @@ fun HistoryScreen() {
             )
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
-if (isLoading) {
-    key("loading") { CircularProgressIndicator(modifier = Modifier.align(Alignment.Center)) }
-} else if (historyItems.isEmpty()) {
-    key("empty") {
-        Text(
-            text = "No history yet",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.Center)
-        )
-    }
-} else {
-    key("list") {
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(
-                items = historyItems,
-                key = { item -> "${item.visitTime}_${item.url}" }
-            ) { item ->
-                HistoryItemRow(
-                    item = item,
-                    dateFormat = dateFormat,
-                    onClick = {
-                        val intent = android.content.Intent(context, app.harvester.companion.HomeActivity::class.java).apply {
-                            data = android.net.Uri.parse(item.url)
-                            addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .navigationBarsPadding()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            if (isLoading) {
+                key("loading") { CircularProgressIndicator(modifier = Modifier.align(Alignment.Center)) }
+            } else if (historyItems.isEmpty()) {
+                key("empty") {
+                    Text(
+                        text = "No history yet",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            } else {
+                key("list") {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(
+                            items = historyItems,
+                            key = { item -> "${item.visitTime}_${item.url}" }
+                        ) { item ->
+                            HistoryItemRow(
+                                item = item,
+                                dateFormat = dateFormat,
+                                onClick = { onOpenUrl(item.url) }
+                            )
                         }
-                        context.startActivity(intent)
                     }
-                )
+                }
             }
         }
     }
-}
-}
-}
 }
 
 @Composable
@@ -168,6 +202,7 @@ fun HistoryItemRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(

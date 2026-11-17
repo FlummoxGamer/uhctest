@@ -20,6 +20,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -34,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,8 +65,8 @@ fun UhDownloadListItem(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isFailed = fileItem.status == UhFileItem.Status.Failed
-    val tint = if (isFailed) colorResource(id = R.color.red) else colorResource(id = R.color.subtext)
-    val bgColor = if (isSelected) colorResource(id = R.color.surface_3) else colorResource(id = R.color.surface)
+    val tint = if (isFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+    val bgColor = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface
 
     val dismissState = rememberSwipeToDismissBoxState()
 
@@ -84,14 +84,15 @@ fun UhDownloadListItem(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(colorResource(id = R.color.red))
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.error)
                     .padding(horizontal = 20.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_delete),
                     contentDescription = "Delete",
-                    tint = colorResource(id = R.color.bg)
+                    tint = MaterialTheme.colorScheme.background
                 )
             }
         },
@@ -106,7 +107,7 @@ fun UhDownloadListItem(
                 .padding(12.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                
+
                 if (fileItem.contentType?.startsWith("image/") == true) {
                     AsyncImage(
                         model = File(fileItem.filePath),
@@ -125,13 +126,13 @@ fun UhDownloadListItem(
                         modifier = Modifier.size(40.dp)
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.width(12.dp))
-                
+
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = fileItem.fileName ?: fileItem.url,
-                        color = colorResource(id = R.color.text),
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 15.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -144,81 +145,85 @@ fun UhDownloadListItem(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                
+
                 if (areIconsVisible) {
                     when (fileItem.status) {
                         is UhFileItem.Status.Downloading -> {
                             IconButton(onClick = onPauseClick) {
-                                Icon(painterResource(R.drawable.ic_uh_media_pause), "Pause", tint = colorResource(id = R.color.text))
+                                Icon(painterResource(R.drawable.ic_uh_media_pause), "Pause", tint = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         is UhFileItem.Status.Paused -> {
                             IconButton(onClick = onResumeClick) {
-                                Icon(painterResource(R.drawable.ic_uh_media_play), "Resume", tint = colorResource(id = R.color.text))
+                                Icon(painterResource(R.drawable.ic_uh_media_play), "Resume", tint = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         is UhFileItem.Status.Failed -> {
                             IconButton(onClick = onRetryClick) {
-                                Icon(painterResource(R.drawable.ic_uh_retry), "Retry", tint = colorResource(id = R.color.text))
+                                Icon(painterResource(R.drawable.ic_uh_retry), "Retry", tint = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         else -> {}
                     }
-                    
+
                     Box {
                         IconButton(onClick = { showMenu = true }) {
-                            Icon(painterResource(R.drawable.mozac_ic_more_vertical_round_24), contentDescription = stringResource(R.string.content_description_menu))
+                            Icon(
+                                painterResource(R.drawable.mozac_ic_more_vertical_round_24),
+                                contentDescription = stringResource(R.string.content_description_menu),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-DropdownMenu(
-    expanded = showMenu,
-    onDismissRequest = { showMenu = false }
-) {
-    if (fileItem.status is UhFileItem.Status.Completed) {
-        key("share_url") {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.download_share_url)) },
-                onClick = { showMenu = false; onShareUrlClick() }
-            )
-        }
-        key("share_file") {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.download_share_file)) },
-                onClick = { showMenu = false; onShareFileClick() }
-            )
-        }
-        key("rename") {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.download_rename_file)) },
-                onClick = { showMenu = false; onRenameClick() }
-            )
-        }
-    } else {
-        key("share_url_not_completed") {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.download_share_url)) },
-                onClick = { showMenu = false; onShareUrlClick() }
-            )
-        }
-    }
-    key("delete") {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.download_delete_item), color = colorResource(id = R.color.red)) },
-            onClick = { showMenu = false; onDeleteClick() }
-        )
-    }
-}
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            if (fileItem.status is UhFileItem.Status.Completed) {
+                                key("share_url") {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.download_share_url)) },
+                                        onClick = { showMenu = false; onShareUrlClick() }
+                                    )
+                                }
+                                key("share_file") {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.download_share_file)) },
+                                        onClick = { showMenu = false; onShareFileClick() }
+                                    )
+                                }
+                                key("rename") {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.download_rename_file)) },
+                                        onClick = { showMenu = false; onRenameClick() }
+                                    )
+                                }
+                            } else {
+                                key("share_url_not_completed") {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.download_share_url)) },
+                                        onClick = { showMenu = false; onShareUrlClick() }
+                                    )
+                                }
+                            }
+                            key("delete") {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.download_delete_item), color = MaterialTheme.colorScheme.error) },
+                                    onClick = { showMenu = false; onDeleteClick() }
+                                )
+                            }
+                        }
                     }
                 }
             }
-            
+
             if (fileItem.status is UhFileItem.Status.Downloading || fileItem.status is UhFileItem.Status.Initiated) {
                 Spacer(modifier = Modifier.height(8.dp))
                 val progress = (fileItem.status as? UhFileItem.Status.Downloading)?.progress ?: 0f
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                    color = colorResource(id = R.color.accent),
-                    trackColor = colorResource(id = R.color.surface_2)
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             }
         }

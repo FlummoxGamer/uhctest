@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,11 +53,19 @@ fun UhGlobalToolbar(
     val isHome = currentDestinationId == R.id.homeFragment || currentDestinationId == null
     val isBrowser = currentDestinationId == R.id.browserFragment
 
+    LaunchedEffect(isEditing, searchEngine.id) {
+        if (isEditing) {
+            searchViewModel.onQueryChanged(editText, isBarBottom)
+        }
+    }
+
     if (!isHome && !isBrowser && !isEditing) {
         return
     }
 
     val displayUrl = if (isBrowser) (selectedTab?.content?.url ?: "") else ""
+    val pageProgress = if (isBrowser) (selectedTab?.content?.progress ?: 0) else 0
+    val isPageLoading = isBrowser && (selectedTab?.content?.loading == true)
     val iconState = if (isBrowser) {
         val currentUrl = selectedTab?.content?.url ?: ""
         when {
@@ -122,6 +131,11 @@ fun UhGlobalToolbar(
         }
     }
 
+    val onFillUrl: (String) -> Unit = { url ->
+        viewModel.onTextChanged(url)
+        searchViewModel.onQueryChanged(url, isBarBottom)
+    }
+
     Box(modifier = modifier) {
         if (isEditing) {
             UhSearchScreen(
@@ -135,6 +149,8 @@ fun UhGlobalToolbar(
                         iconState = iconState,
                         isWallpaperActive = false,
                         editText = editText,
+                        progress = 0,
+                        isLoading = false,
                         onEditTextChanged = {
                             viewModel.onTextChanged(it)
                             searchViewModel.onQueryChanged(it, isBarBottom)
@@ -154,7 +170,8 @@ fun UhGlobalToolbar(
                     )
                 },
                 onDismiss = onDismiss,
-                onSubmit = onSearchSubmit
+                onSubmit = onSearchSubmit,
+                onFillUrl = onFillUrl
             )
         } else {
             val barPositionModifier = if (isBarBottom) {
@@ -173,9 +190,14 @@ fun UhGlobalToolbar(
                     iconState = iconState,
                     isWallpaperActive = isHome,
                     editText = editText,
+                    progress = pageProgress,
+                    isLoading = isPageLoading,
                     onEditTextChanged = { viewModel.onTextChanged(it) },
                     onSubmit = onSearchSubmit,
-                    onEditStart = { viewModel.enterEditMode("") },
+                    onEditStart = {
+                        viewModel.enterEditMode("")
+                        searchViewModel.onQueryChanged("", isBarBottom)
+                    },
                     onClear = { },
                     onSearchEngineClick = { showSearchEnginePicker = true },
                     onLockClick = openTrustPanel,

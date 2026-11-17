@@ -1,12 +1,12 @@
 package app.harvester.companion.browser
 
 import android.app.Application
-import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.harvester.companion.SearchEnginePrefs
 import app.harvester.companion.SettingsPrefs
 import app.harvester.companion.UHApp
+import app.harvester.companion.UHLog
 import app.harvester.companion.browser.search.SearchSuggestionClient
 import app.harvester.companion.components.appstate.AppAction
 import kotlinx.coroutines.Dispatchers
@@ -26,11 +26,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _isEditing = MutableStateFlow(false)
     val isEditing: StateFlow<Boolean> = _isEditing
 
-    private val _isBarBottom = MutableStateFlow(SettingsPrefs.getInt(context, SettingsPrefs.K_ADDRESS_BAR_POSITION, 1) == 1)
-    val isBarBottom: StateFlow<Boolean> = _isBarBottom
+    val isBarBottom: StateFlow<Boolean> = SettingsPrefs.addressBarBottomFlow(context)
 
-    private val _searchEngine = MutableStateFlow(SearchEnginePrefs.currentEntry(context))
-    val searchEngine: StateFlow<SearchEnginePrefs.Entry> = _searchEngine
+    val searchEngine: StateFlow<SearchEnginePrefs.Entry> = SearchEnginePrefs.activeEngineFlow(context)
 
     private val _editText = MutableStateFlow("")
     val editText: StateFlow<String> = _editText
@@ -39,17 +37,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val suggestions: StateFlow<List<String>> = _suggestions
 
     private var suggestJob: Job? = null
-
-    init {
-        context.getSharedPreferences("uh_settings", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener { _, key ->
-            if (key == SettingsPrefs.K_ADDRESS_BAR_POSITION) {
-                _isBarBottom.value = SettingsPrefs.getInt(context, SettingsPrefs.K_ADDRESS_BAR_POSITION, 1) == 1
-            }
-        }
-        context.getSharedPreferences("uh_search", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener { _, _ ->
-            _searchEngine.value = SearchEnginePrefs.currentEntry(context)
-        }
-    }
 
     fun enterEditMode(currentUrl: String) {
         _isEditing.value = true
@@ -92,6 +79,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         .take(10)
                         .map { it.url }
                 } catch (e: Exception) {
+                    UHLog.w("search_warn", "Failed querying local history suggestions: ${e.message}")
                     emptyList()
                 }
             } else emptyList()
@@ -105,7 +93,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     if (remote != null) {
                         combined = remote + combined
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    UHLog.w("search_warn", "Remote suggestion fetch failed: ${e.message}")
+                }
             }
 
             _suggestions.value = combined.distinct().take(8)
@@ -113,8 +103,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateBarPosition(isBottom: Boolean) {
-        if (_isBarBottom.value != isBottom) {
-            _isBarBottom.value = isBottom
+        val target = if (isBottom) 1 else 0
+        if (SettingsPrefs.getInt(context, SettingsPrefs.K_ADDRESS_BAR_POSITION, 1) != target) {
+            SettingsPrefs.setInt(context, SettingsPrefs.K_ADDRESS_BAR_POSITION, target)
         }
     }
 

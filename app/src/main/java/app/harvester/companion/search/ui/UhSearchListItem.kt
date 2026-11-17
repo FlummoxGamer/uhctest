@@ -80,11 +80,15 @@ fun UhSearchListItem(
                 }
 
                 IconButton(onClick = {
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, item.url)
+                    try {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, item.url)
+                        }
+                        context.startActivity(Intent.createChooser(shareIntent, "Share"))
+                    } catch (e: Exception) {
+                        app.harvester.companion.UHLog.throwable("ui_error", "Failed sharing current tab URL", e)
                     }
-                    context.startActivity(Intent.createChooser(shareIntent, "Share"))
                 }) {
                     Icon(
                         painter = painterResource(id = R.drawable.uh_ic_share_24),
@@ -94,28 +98,36 @@ fun UhSearchListItem(
                     )
                 }
 
-        IconButton(onClick = {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("URL", item.url))
-        }) {
-            Icon(
-                painter = painterResource(id = R.drawable.uh_ic_copy_24),
-                contentDescription = "Copy",
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+                IconButton(onClick = {
+                    try {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        if (clipboard == null) {
+                            app.harvester.companion.UHLog.w("ui_warn", "ClipboardManager unavailable when copying URL.")
+                        } else {
+                            clipboard.setPrimaryClip(ClipData.newPlainText("URL", item.url))
+                        }
+                    } catch (e: Exception) {
+                        app.harvester.companion.UHLog.throwable("ui_error", "Failed copying URL to clipboard", e)
+                    }
+                }) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.uh_ic_copy_24),
+                        contentDescription = "Copy",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
-        IconButton(onClick = { onEditUrl(item.url) }) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_edit),
-                contentDescription = "Edit",
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+                IconButton(onClick = { onEditUrl(item.url) }) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_edit),
+                        contentDescription = "Edit",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
-    }
-    }
         is Model.Header -> {
             Text(
                 text = item.title,

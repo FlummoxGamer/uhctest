@@ -1,10 +1,18 @@
 package app.harvester.companion.theme
 
+import android.app.Activity
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import app.harvester.companion.ThemePrefs
 
 private val DarkColorScheme = darkColorScheme(
@@ -12,10 +20,13 @@ private val DarkColorScheme = darkColorScheme(
     background = UH_Dark_Bg,
     surface = UH_Dark_Surface,
     surfaceVariant = UH_Dark_Surface2,
-    onPrimary = UH_Accent_Strong,
+    secondaryContainer = UH_Dark_Surface3,
+    surfaceContainer = UH_Dark_Surface2,
+    surfaceContainerHigh = UH_Dark_Surface3,
+    onPrimary = Color.White,
     onBackground = UH_Dark_Text,
     onSurface = UH_Dark_Text,
-    onSurfaceVariant = UH_Dark_Text,
+    onSurfaceVariant = UH_Dark_Subtext,
     error = UH_Dark_Red,
     outline = UH_Dark_Border
 )
@@ -25,10 +36,13 @@ private val LightColorScheme = lightColorScheme(
     background = UH_Light_Bg,
     surface = UH_Light_Surface,
     surfaceVariant = UH_Light_Surface2,
+    secondaryContainer = UH_Light_Surface3,
+    surfaceContainer = UH_Light_Surface2,
+    surfaceContainerHigh = UH_Light_Surface3,
     onPrimary = UH_Light_Bg,
     onBackground = UH_Light_Text,
     onSurface = UH_Light_Text,
-    onSurfaceVariant = UH_Light_Text,
+    onSurfaceVariant = UH_Light_Subtext,
     error = UH_Light_Red,
     outline = UH_Light_Border
 )
@@ -36,10 +50,23 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun UHTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
-    val isDark = when (ThemePrefs.getMode(context)) {
+    val mode by ThemePrefs.modeFlow(context).collectAsState()
+    val systemDark = isSystemInDarkTheme()
+    val isDark = when (mode) {
         ThemePrefs.MODE_DARK -> true
         ThemePrefs.MODE_LIGHT -> false
-        else -> androidx.compose.foundation.isSystemInDarkTheme()
+        else -> systemDark
+    }
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window
+            if (window != null) {
+                val controller = WindowCompat.getInsetsController(window, view)
+                controller.isAppearanceLightStatusBars = !isDark
+                controller.isAppearanceLightNavigationBars = !isDark
+            }
+        }
     }
     val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
     MaterialTheme(colorScheme = colorScheme, content = content)

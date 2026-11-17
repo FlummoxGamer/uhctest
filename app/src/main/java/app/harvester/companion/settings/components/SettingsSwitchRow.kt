@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -18,24 +19,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.harvester.companion.R
 import app.harvester.companion.SettingsPrefs
 
 @Composable
 fun SettingsSwitchRow(title: String, key: String, default: Boolean) {
     val context = LocalContext.current
     var isChecked by remember { mutableStateOf(SettingsPrefs.getBool(context, key, default)) }
-    
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(colorResource(id = R.color.surface))
-            .clickable { 
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable {
                 isChecked = !isChecked
                 SettingsPrefs.setBool(context, key, isChecked)
             }
@@ -44,19 +43,19 @@ fun SettingsSwitchRow(title: String, key: String, default: Boolean) {
     ) {
         Text(
             text = title,
-            color = colorResource(id = R.color.text),
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 16.sp,
             modifier = Modifier.weight(1f)
         )
         Switch(
             checked = isChecked,
-            onCheckedChange = { 
+            onCheckedChange = {
                 isChecked = it
                 SettingsPrefs.setBool(context, key, it)
             },
             colors = SwitchDefaults.colors(
-                checkedThumbColor = colorResource(id = R.color.bg),
-                checkedTrackColor = colorResource(id = R.color.accent)
+                checkedThumbColor = MaterialTheme.colorScheme.background,
+                checkedTrackColor = MaterialTheme.colorScheme.primary
             )
         )
     }
