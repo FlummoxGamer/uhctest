@@ -13,12 +13,14 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.DialogFragment
@@ -45,7 +47,7 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
     private var isActionHandled = false
     private lateinit var downloadLocationFormatter: DefaultDownloadLocationFormatter
 
-    var onConfirmSave: (String, String) -> Unit = { _, _ -> }
+    var onConfirmSave: (String, String, Boolean) -> Unit = { _, _, _ -> }
     var onCancel: () -> Unit = {}
 
     internal var directoryLauncher: ActivityResultLauncher<Uri?> =
@@ -53,10 +55,11 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
             val safeUri = uri ?: return@registerForActivityResult
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             try {
-                context?.contentResolver?.takePersistableUriPermission(safeUri, flags)
+                context?.applicationContext?.contentResolver?.takePersistableUriPermission(safeUri, flags)
                 dialogState = dialogState.copy(directoryPath = safeUri.toString())
             } catch (e: SecurityException) {
                 UHLog.throwable("download_error", "Failed to take persistable URI permission in download prompt", e)
+                dialogState = dialogState.copy(directoryPath = safeUri.toString())
             }
         }
 
@@ -65,7 +68,8 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
         dialog?.window?.apply {
             clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
             setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            val widthPx = (resources.displayMetrics.widthPixels * 0.92f).toInt().coerceAtMost((420f * resources.displayMetrics.density).toInt())
+            setLayout(widthPx, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
     }
 
@@ -90,7 +94,11 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
         val ctx = requireContext()
         downloadLocationFormatter = DefaultDownloadLocationFormatter(DefaultAndroidFileUtils(ctx))
         val initialDir = directoryPath.ifBlank { DownloadLocationResolver.resolveTargetDirectory(ctx) }
-        dialogState = RenameAndChangeLocationDialogState(fileName = fileName, directoryPath = initialDir)
+        dialogState = RenameAndChangeLocationDialogState(
+            fileName = fileName,
+            directoryPath = initialDir,
+            rememberAsDefault = false,
+        )
         promptAbuserDetector.start()
 
         return Dialog(ctx).apply {
@@ -110,24 +118,31 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
                     val friendlyPath = try {
                         downloadLocationFormatter.getFriendlyPath(dialogState.directoryPath)
                     } catch (e: MissingUriPermission) {
-                        UHLog.w("download_warn", "Missing URI permission for ${dialogState.directoryPath}; falling back to default directory")
-                        val defaultLocation = DownloadLocationResolver.resolveDefaultConfiguredDirectory(ctx)
-                        if (dialogState.directoryPath != defaultLocation) {
-                            dialogState = dialogState.copy(directoryPath = defaultLocation)
+                        if (dialogState.directoryPath.startsWith("content://")) {
+                            Uri.parse(dialogState.directoryPath).lastPathSegment?.substringAfterLast(':')
+                                ?.takeIf { it.isNotBlank() } ?: "Selected folder"
+                        } else {
+                            UHLog.w("download_warn", "Missing URI permission for ${dialogState.directoryPath}; falling back to default directory")
+                            val defaultLocation = DownloadLocationResolver.resolveDefaultConfiguredDirectory(ctx)
+                            if (dialogState.directoryPath != defaultLocation) {
+                                dialogState = dialogState.copy(directoryPath = defaultLocation)
+                            }
+                            downloadLocationFormatter.getFriendlyPath(defaultLocation)
                         }
-                        downloadLocationFormatter.getFriendlyPath(defaultLocation)
                     }
 
                     Surface(
                         shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        tonalElevation = 6.dp
+                        tonalElevation = 6.dp,
+                        modifier = Modifier.widthIn(max = 420.dp)
                     ) {
                         RenameAndChangeLocationDialogContent(
                             dialogState = dialogState,
                             friendlyPath = friendlyPath,
                             title = buildDialogTitle(),
                             onFileNameChange = { newFileName -> dialogState = dialogState.copy(fileName = newFileName) },
+                            onRememberChange = { remember -> dialogState = dialogState.copy(rememberAsDefault = remember) },
                             onDirectorySelect = {
                                 try {
                                     directoryLauncher.launch(null)
@@ -141,8 +156,9 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
                                 isActionHandled = true
                                 val finalName = dialogState.fileName
                                 val finalDir = dialogState.directoryPath
+                                val rememberDefault = dialogState.rememberAsDefault
                                 dismissAllowingStateLoss()
-                                onConfirmSave(finalName, finalDir)
+                                onConfirmSave(finalName, finalDir, rememberDefault)
                             },
                             onCancel = {
                                 if (isActionHandled) return@RenameAndChangeLocationDialogContent

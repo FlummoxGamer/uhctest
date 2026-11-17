@@ -56,6 +56,19 @@ object DownloadLocationResolver {
         return resolveDefaultConfiguredDirectory(context)
     }
 
+    fun resolveDirectoryOrDefault(context: Context, explicitPath: String?): String {
+        val candidate = explicitPath?.trim().orEmpty()
+        if (candidate.isNotBlank()) {
+            if (candidate.startsWith("content://")) {
+                if (isValidSafTree(context, candidate)) return candidate
+            } else {
+                val dir = File(candidate)
+                if ((dir.exists() || dir.mkdirs()) && dir.canWrite()) return candidate
+            }
+        }
+        return resolveTargetDirectory(context)
+    }
+
     fun isValidSafTree(context: Context, uriString: String): Boolean {
         return try {
             val uri = Uri.parse(uriString)

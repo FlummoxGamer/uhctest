@@ -139,13 +139,15 @@ fun HomeScreen(
             ) {
                 itemsIndexed(shortcuts, key = { _, item -> item.id }) { _, shortcut ->
                     ReorderableItem(reorderableState, key = shortcut.id) { isDragging ->
-                        Box {
+                        Box(modifier = Modifier.fillMaxWidth()) {
                             ShortcutItem(
                                 name = shortcut.name,
                                 iconUrl = shortcut.iconUrl,
                                 textColor = textColor,
                                 shadowColor = shadowColor,
-                                modifier = Modifier.draggableHandle(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .draggableHandle(
                                     dragGestureDetector = DragGestureDetector.Compose { onDragStart, onDragEnd, onDragCancel, onDrag ->
                                         coroutineScope {
                                             awaitEachGesture {
@@ -327,10 +329,12 @@ private fun AddShortcutItem(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable(
-            interactionSource = remember { MutableInteractionSource() },
-            indication = null
-        ) { onClick() }
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onClick() }
     ) {
         Box(
             modifier = Modifier

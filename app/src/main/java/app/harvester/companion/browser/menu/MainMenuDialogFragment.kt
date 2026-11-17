@@ -2,7 +2,6 @@ package app.harvester.companion.browser.menu
 
 import android.app.Dialog
 import android.content.Intent
-import androidx.navigation.fragment.findNavController
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -35,16 +34,16 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.navigation.NavOptions
 import androidx.navigation.fragment.NavHostFragment
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import app.harvester.companion.HomeActivity
 import app.harvester.companion.R
-import app.harvester.companion.ScriptsActivity
-import app.harvester.companion.SettingsActivity
 import app.harvester.companion.UHApp
 import app.harvester.companion.UHLog
+import app.harvester.companion.settings.SettingsActivity
+import app.harvester.companion.settings.addons.ScriptsActivity
 import app.harvester.companion.theme.UHTheme
 import mozilla.components.browser.state.selector.selectedTab
 import com.google.android.material.R as materialR
@@ -77,19 +76,12 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
     }
 
     private fun navigateSafe(destinationId: Int) {
-        val navHostFragment = requireActivity().supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
-        val controller = navHostFragment?.navController
-        if (controller == null) {
-            UHLog.e("ui_error", "MainMenu failed to navigate: NavController not found.")
-            return
-        }
-        try {
-            val options = NavOptions.Builder()
-                .setLaunchSingleTop(true)
-                .build()
-            controller.navigate(destinationId, null, options)
-        } catch (e: Exception) {
-            UHLog.throwable("ui_error", "MainMenu navigation failed for destination $destinationId", e)
+        val hostActivity = activity as? HomeActivity
+        dismissAllowingStateLoss()
+        if (hostActivity != null) {
+            hostActivity.navigateFromMenu(destinationId)
+        } else {
+            UHLog.e("ui_error", "MainMenu failed to navigate: HomeActivity unavailable.")
         }
     }
 
@@ -124,24 +116,22 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                         ) {
                             key("fav") {
                                 TopRowItem("Favorites", R.drawable.ic_favorites, Modifier.weight(1f)) {
-                                    dismiss()
+                                    dismissAllowingStateLoss()
                                 }
                             }
                             key("history") {
                                 TopRowItem("History", R.drawable.ic_history, Modifier.weight(1f)) {
-                                    dismiss()
                                     navigateSafe(R.id.historyFragment)
                                 }
                             }
                             key("downloads") {
-                                TopRowItem("Downloads", R.drawable.ic_downloads, Modifier.weight(1f)) {
-                                    dismiss()
-                                    navigateSafe(R.id.action_global_downloadsFragment)
+                                TopRowItem("Downloads", R.drawable.fx_ic_downloads_24, Modifier.weight(1f)) {
+                                    navigateSafe(R.id.downloadsFragment)
                                 }
                             }
                             key("playlist") {
                                 TopRowItem("Playlist", R.drawable.ic_playlist, Modifier.weight(1f)) {
-                                    dismiss()
+                                    dismissAllowingStateLoss()
                                 }
                             }
                         }
@@ -154,19 +144,19 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                                 .padding(vertical = 8.dp)
                         ) {
                             if (!isHome) {
-                                MenuRowItem(R.drawable.ic_menu_translate, "Translate") { dismiss() }
-                                MenuRowItem(R.drawable.ic_menu_find, "Find in Page") { dismiss() }
+                                MenuRowItem(R.drawable.ic_menu_translate, "Translate") { dismissAllowingStateLoss() }
+                                MenuRowItem(R.drawable.ic_menu_find, "Find in Page") { dismissAllowingStateLoss() }
                                 MenuRowItem(
                                     iconRes = if (isDesktopMode) R.drawable.ic_menu_mobile else R.drawable.ic_menu_desktop,
                                     label = if (isDesktopMode) "Request Mobile Site" else "Request Desktop Site"
                                 ) {
-                                    dismiss()
+                                    dismissAllowingStateLoss()
                                     selectedTab?.let { tab ->
                                         components.useCases.sessionUseCases.requestDesktopSite(!isDesktopMode, tab.id)
                                     } ?: UHLog.w("ui_warn", "Request desktop site clicked with no active tab.")
                                 }
-                                MenuRowItem(R.drawable.ic_menu_add_home, "Add to Home Screen") { dismiss() }
-                                MenuRowItem(R.drawable.ic_menu_dev, "Developer Tools") { dismiss() }
+                                MenuRowItem(R.drawable.ic_menu_add_home, "Add to Home Screen") { dismissAllowingStateLoss() }
+                                MenuRowItem(R.drawable.ic_menu_dev, "Developer Tools") { dismissAllowingStateLoss() }
 
                                 Box(
                                     modifier = Modifier
@@ -177,9 +167,10 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                                 )
                             }
 
-                            MenuRowItem(R.drawable.ic_settings, "Settings") {
-                                dismiss()
-                                startActivity(Intent(requireContext(), SettingsActivity::class.java))
+                            MenuRowItem(R.drawable.fx_ic_settings_24, "Settings") {
+                                val ctx = context
+                                dismissAllowingStateLoss()
+                                ctx.startActivity(Intent(ctx, SettingsActivity::class.java))
                             }
                         }
 
@@ -193,8 +184,9 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             BottomBarItem("Home", R.drawable.ic_home) {
-                                dismiss()
-                                val navHostFragment = requireActivity().supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+                                val act = activity
+                                dismissAllowingStateLoss()
+                                val navHostFragment = act?.supportFragmentManager?.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
                                 val controller = navHostFragment?.navController
                                 if (controller == null) {
                                     UHLog.w("ui_warn", "Home clicked but NavController is unavailable.")
@@ -206,14 +198,19 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
                                     }
                                 }
                             }
-                            BottomBarItem("Add", R.drawable.ic_heart_plus) { dismiss() }
-                            BottomBarItem("Quit", R.drawable.ic_power) { dismiss(); requireActivity().finish() }
-                            BottomBarItem("Scripts", R.drawable.ic_code) {
-                                dismiss()
-                                startActivity(Intent(requireContext(), ScriptsActivity::class.java))
+                            BottomBarItem("Add", R.drawable.ic_heart_plus) { dismissAllowingStateLoss() }
+                            BottomBarItem("Quit", R.drawable.ic_power) {
+                                val act = activity
+                                dismissAllowingStateLoss()
+                                act?.finish()
+                            }
+                            BottomBarItem("Scripts", R.drawable.fx_ic_scripts_24) {
+                                val ctx = context
+                                dismissAllowingStateLoss()
+                                ctx.startActivity(Intent(ctx, ScriptsActivity::class.java))
                             }
                             BottomBarItem("Reload", R.drawable.ic_reload) {
-                                dismiss()
+                                dismissAllowingStateLoss()
                                 val tab = selectedTab ?: components.store.state.selectedTab
                                 if (tab != null) {
                                     components.useCases.sessionUseCases.reload(tab.id)

@@ -10,6 +10,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -48,7 +49,11 @@ private val LightColorScheme = lightColorScheme(
 )
 
 @Composable
-fun UHTheme(content: @Composable () -> Unit) {
+fun UHTheme(
+    lightStatusBarOverride: Boolean? = null,
+    lightNavigationBarOverride: Boolean? = null,
+    content: @Composable () -> Unit
+) {
     val context = LocalContext.current
     val mode by ThemePrefs.modeFlow(context).collectAsState()
     val systemDark = isSystemInDarkTheme()
@@ -57,17 +62,21 @@ fun UHTheme(content: @Composable () -> Unit) {
         ThemePrefs.MODE_LIGHT -> false
         else -> systemDark
     }
+    val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
     val view = LocalView.current
     if (!view.isInEditMode) {
+        val useLightStatus = lightStatusBarOverride ?: !isDark
+        val useLightNav = lightNavigationBarOverride ?: !isDark
+        val bgArgb = colorScheme.background.toArgb()
         SideEffect {
             val window = (view.context as? Activity)?.window
             if (window != null) {
+                window.decorView.setBackgroundColor(bgArgb)
                 val controller = WindowCompat.getInsetsController(window, view)
-                controller.isAppearanceLightStatusBars = !isDark
-                controller.isAppearanceLightNavigationBars = !isDark
+                controller.isAppearanceLightStatusBars = useLightStatus
+                controller.isAppearanceLightNavigationBars = useLightNav
             }
         }
     }
-    val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
     MaterialTheme(colorScheme = colorScheme, content = content)
 }

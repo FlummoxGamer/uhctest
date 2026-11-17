@@ -67,7 +67,7 @@ object SearchEnginePrefs {
         out.add(Entry(ENGINE_GOOGLE, "Google", "google.com",
             "https://www.google.com/search?q=%s",
             "https://suggestqueries.google.com/complete/search?client=firefox&q=%s",
-            "https://trends.google.com/trendingsearches/daily/rss?geo=$geo",
+            "https://trends.google.com/trending/rss?geo=$geo",
             ddgIcon("google.com"), false))
 
         out.add(Entry(ENGINE_BING, "Bing", "bing.com",

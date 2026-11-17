@@ -2,11 +2,13 @@ package app.harvester.companion.home
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import app.harvester.companion.Shortcut
 import app.harvester.companion.ShortcutStore
 import app.harvester.companion.WallpaperStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
@@ -23,11 +25,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _textColor = MutableStateFlow(WallpaperStore.getTextColor(context))
     val textColor: StateFlow<Int> = _textColor
 
+    init {
+        viewModelScope.launch {
+            WallpaperStore.wallpaperFlow(context).collect { wp ->
+                _wallpaperPath.value = wp.path
+                _isVideo.value = wp.isVideo
+                _textColor.value = wp.textColor
+            }
+        }
+    }
+
     fun refresh() {
         _shortcuts.value = ShortcutStore.list(context)
-        _wallpaperPath.value = WallpaperStore.getCurrentWallpaper(context)
-        _isVideo.value = WallpaperStore.isCurrentVideo(context)
-        _textColor.value = WallpaperStore.getTextColor(context)
+        val wp = WallpaperStore.wallpaperFlow(context).value
+        _wallpaperPath.value = wp.path
+        _isVideo.value = wp.isVideo
+        _textColor.value = wp.textColor
     }
 
     fun moveShortcut(from: Int, to: Int) {

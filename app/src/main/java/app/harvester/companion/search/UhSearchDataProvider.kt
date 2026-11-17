@@ -13,6 +13,8 @@ import app.harvester.companion.search.model.UhSearchListItem
 import app.harvester.companion.utils.SearchHistoryUtils
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import mozilla.components.browser.state.selector.selectedTab
@@ -21,6 +23,10 @@ import org.json.JSONObject
 
 object UhSearchDataProvider {
     private val suggestionClient = SearchSuggestionClient()
+
+    private data class CachedTrends(val timestampMs: Long, val items: List<String>)
+    private val trendsCache = ConcurrentHashMap<String, CachedTrends>()
+    private const val TRENDS_TTL_MS = 15 * 60 * 1000L
 
     data class SearchFetchResult(
         val items: List<UhSearchListItem>,
@@ -108,14 +114,11 @@ object UhSearchDataProvider {
                 }
             }
 
-            val trendingUrl = activeEngine.trendingUrl
-            if (!trendingUrl.isNullOrBlank()) {
-                val trends = fetchTrending(trendingUrl)
-                if (trends.isNotEmpty()) {
-                    items.add(UhSearchListItem.Header("Trending"))
-                    trends.take(5).forEach { trend ->
-                        items.add(UhSearchListItem.Suggestion(trend, SuggestionType.TRENDING))
-                    }
+            val trends = fetchTrendingWithFallback(activeEngine.trendingUrl)
+            if (trends.isNotEmpty()) {
+                items.add(UhSearchListItem.Header("Trending"))
+                trends.take(6).forEach { trend ->
+                    items.add(UhSearchListItem.Suggestion(trend, SuggestionType.TRENDING))
                 }
             }
         } else {
@@ -166,24 +169,52 @@ object UhSearchDataProvider {
         SearchFetchResult(items = items, clipboardUrl = clipboardUrl, currentTab = currentTabItem)
     }
 
+    private fun fetchTrendingWithFallback(engineEndpoint: String?): List<String> {
+        val geo = Locale.getDefault().country.ifBlank { "US" }.uppercase(Locale.US)
+        val candidates = linkedSetOf<String>()
+        if (!engineEndpoint.isNullOrBlank()) {
+            candidates.add(engineEndpoint)
+        }
+        candidates.add("https://trends.google.com/trending/rss?geo=$geo")
+        if (geo != "US") {
+            candidates.add("https://trends.google.com/trending/rss?geo=US")
+        }
+
+        for (endpoint in candidates) {
+            val now = System.currentTimeMillis()
+            val cached = trendsCache[endpoint]
+            if (cached != null && (now - cached.timestampMs) < TRENDS_TTL_MS && cached.items.isNotEmpty()) {
+                return cached.items
+            }
+            val parsed = fetchTrending(endpoint)
+            if (parsed.isNotEmpty()) {
+                trendsCache[endpoint] = CachedTrends(now, parsed)
+                return parsed
+            }
+        }
+        return emptyList()
+    }
+
     private fun fetchTrending(endpoint: String): List<String> {
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Android)")
-                connectTimeout = 4000
-                readTimeout = 4000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+                setRequestProperty("Accept", "application/rss+xml, application/xml, application/json, text/xml, */*")
+                connectTimeout = 4500
+                readTimeout = 4500
             }
             val code = conn.responseCode
             if (code !in 200..299) {
-                UHLog.w("search_warn", "Trending endpoint returned HTTP $code")
+                UHLog.w("search_warn", "Trending endpoint ($endpoint) returned HTTP $code")
                 return emptyList()
             }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             if (body.isBlank()) return emptyList()
             parseTrendingBody(body)
         } catch (e: Exception) {
-            UHLog.w("search_warn", "Trending fetch failed: ${e.message}")
+            UHLog.w("search_warn", "Trending fetch failed ($endpoint): ${e.message}")
             emptyList()
         } finally {
             conn?.disconnect()
@@ -191,20 +222,40 @@ object UhSearchDataProvider {
     }
 
     private fun parseTrendingBody(body: String): List<String> {
-        val trimmed = body.trimStart()
+        val trimmed = body.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
         val out = mutableListOf<String>()
         if (trimmed.startsWith("<")) {
-            val itemRegex = Regex("<item>[\\s\\S]*?<title>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/title>[\\s\\S]*?<\\/item>", RegexOption.IGNORE_CASE)
+            val itemRegex = Regex("<(?:item|entry)\\b[^>]*>[\\s\\S]*?<title(?:\\s+[^>]*)?>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/title>[\\s\\S]*?<\\/(?:item|entry)>", RegexOption.IGNORE_CASE)
             for (match in itemRegex.findAll(trimmed)) {
                 val decoded = Html.fromHtml(match.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString().trim()
-                if (decoded.isNotBlank()) out.add(decoded)
+                if (decoded.isNotBlank() && !decoded.equals("Daily Search Trends", ignoreCase = true)) {
+                    out.add(decoded)
+                }
             }
         } else if (trimmed.startsWith("[")) {
             try {
                 val arr = JSONArray(trimmed)
-                for (i in 0 until arr.length()) {
-                    val v = arr.optString(i).trim()
-                    if (v.isNotBlank()) out.add(v)
+                // Google suggest-style [query, [suggestions...]] or flat string array
+                if (arr.length() >= 2 && arr.opt(1) is JSONArray) {
+                    val inner = arr.getJSONArray(1)
+                    for (i in 0 until inner.length()) {
+                        val v = inner.optString(i).trim()
+                        if (v.isNotBlank()) out.add(v)
+                    }
+                } else {
+                    for (i in 0 until arr.length()) {
+                        val el = arr.opt(i)
+                        if (el is String && el.isNotBlank()) {
+                            out.add(el.trim())
+                        } else if (el is JSONObject) {
+                            val title = el.optString("query")
+                                .ifBlank { el.optString("title") }
+                                .ifBlank { el.optString("Title") }
+                                .ifBlank { el.optString("name") }
+                                .trim()
+                            if (title.isNotBlank()) out.add(title)
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 UHLog.w("search_warn", "Failed parsing JSON array trending response: ${e.message}")
@@ -212,7 +263,7 @@ object UhSearchDataProvider {
         } else if (trimmed.startsWith("{")) {
             try {
                 val obj = JSONObject(trimmed)
-                val candidates = listOf("topics", "Topics", "items", "data", "trends", "trending")
+                val candidates = listOf("topics", "Topics", "items", "data", "trends", "trending", "queries", "TrendingNow")
                 for (key in candidates) {
                     val arr = obj.optJSONArray(key) ?: continue
                     for (i in 0 until arr.length()) {
@@ -221,6 +272,7 @@ object UhSearchDataProvider {
                             is String -> if (el.isNotBlank()) out.add(el.trim())
                             is JSONObject -> {
                                 val title = el.optString("query")
+                                    .ifBlank { el.optString("Query") }
                                     .ifBlank { el.optString("title") }
                                     .ifBlank { el.optString("Title") }
                                     .ifBlank { el.optString("name") }
@@ -235,6 +287,6 @@ object UhSearchDataProvider {
                 UHLog.w("search_warn", "Failed parsing JSON object trending response: ${e.message}")
             }
         }
-        return out.distinctBy { it.lowercase() }.take(5)
+        return out.distinctBy { it.lowercase() }.take(6)
     }
 }

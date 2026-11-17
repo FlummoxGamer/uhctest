@@ -46,6 +46,7 @@ class BrowserFragment : Fragment() {
     private val appLinksFeature = ViewBoundFeatureWrapper<AppLinksFeature>()
     private val promptsFeature = ViewBoundFeatureWrapper<PromptFeature>()
     private val sitePermissionsFeature = ViewBoundFeatureWrapper<SitePermissionsFeature>()
+    private val windowFeature = ViewBoundFeatureWrapper<mozilla.components.feature.tabs.WindowFeature>()
 
     private val viewModel: BrowserViewModel by activityViewModels()
     private var initialUrl: String? = null
@@ -257,6 +258,15 @@ class BrowserFragment : Fragment() {
             view = binding.root
         )
 
+        windowFeature.set(
+            feature = mozilla.components.feature.tabs.WindowFeature(
+                store = components.store,
+                tabsUseCases = components.useCases.tabsUseCases
+            ),
+            owner = this,
+            view = binding.root
+        )
+
         binding.swipeRefresh.setColorSchemeResources(app.harvester.companion.R.color.accent)
         binding.swipeRefresh.setProgressBackgroundColorSchemeResource(app.harvester.companion.R.color.surface_2)
 
@@ -365,10 +375,19 @@ class BrowserFragment : Fragment() {
     }
 
     fun onBackPressed(): Boolean {
+        if (!isAdded || isDetached || context == null) return false
         val components = (requireContext().applicationContext as UHApp).components
+        if (sessionFeature.onBackPressed()) {
+            return true
+        }
         val state = components.store.state.selectedTab
         if (state != null && state.content.canGoBack) {
-            components.useCases.sessionUseCases.goBack.invoke()
+            components.useCases.sessionUseCases.goBack.invoke(state.id)
+            return true
+        }
+        val parentId = state?.parentId
+        if (parentId != null && components.store.state.tabs.any { it.id == parentId }) {
+            components.useCases.tabsUseCases.removeTab(state.id, selectParentIfExists = true)
             return true
         }
         return false
@@ -395,22 +414,34 @@ class BrowserFragment : Fragment() {
     }
 
     private fun canShowDownloadDialog(): Boolean {
-        if (!isAdded || view == null || viewLifecycleOwner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.DESTROYED) return false
+        if (!isAdded || isDetached || host == null || view == null) return false
+        val viewLifecycle = try { viewLifecycleOwner.lifecycle.currentState } catch (_: IllegalStateException) { return false }
+        if (viewLifecycle == androidx.lifecycle.Lifecycle.State.DESTROYED) return false
         return try {
             val isRenameFragmentShowing = childFragmentManager.findFragmentByTag(app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment.RENAME_AND_CHANGE_LOCATION_DIALOG_TAG) != null
             downloadDialog == null && !isRenameFragmentShowing
-        } catch (e: IllegalStateException) {
+        } catch (_: IllegalStateException) {
             false
         }
     }
 
     private fun dismissRenameDialog() {
-        val renameDialog = childFragmentManager.findFragmentByTag(app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment.RENAME_AND_CHANGE_LOCATION_DIALOG_TAG) as? app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment
-        renameDialog?.dismissAllowingStateLoss()
+        if (!isAdded || isDetached || host == null) return
+        try {
+            val renameDialog = childFragmentManager.findFragmentByTag(app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment.RENAME_AND_CHANGE_LOCATION_DIALOG_TAG) as? app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment
+            renameDialog?.dismissAllowingStateLoss()
+        } catch (e: IllegalStateException) {
+            UHLog.w("download_warn", "Skipped rename dialog dismiss: ${e.message}")
+        }
     }
 
     private fun dismissDownloadDialogs() {
-        downloadDialog?.dismiss()
+        try {
+            downloadDialog?.dismiss()
+        } catch (_: Exception) {
+        } finally {
+            downloadDialog = null
+        }
     }
 
     private fun showRenameDownloadDialog(
@@ -420,17 +451,26 @@ class BrowserFragment : Fragment() {
         positiveAction: mozilla.components.feature.downloads.PositiveActionCallback,
         negativeAction: mozilla.components.feature.downloads.NegativeActionCallback,
     ) {
-        val existingFragment = childFragmentManager.findFragmentByTag(app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment.RENAME_AND_CHANGE_LOCATION_DIALOG_TAG)
-        if (existingFragment == null && isAdded && !childFragmentManager.isStateSaved) {
+        if (!isAdded || isDetached || host == null) return
+        val existingFragment = try {
+            childFragmentManager.findFragmentByTag(app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment.RENAME_AND_CHANGE_LOCATION_DIALOG_TAG)
+        } catch (_: IllegalStateException) {
+            return
+        }
+        val appCtx = requireContext().applicationContext
+        if (existingFragment == null && !childFragmentManager.isStateSaved) {
             val renameDialog = app.harvester.companion.downloads.RenameAndChangeLocationDialogFragment.newInstance(
                 fileName = fileName,
                 directoryPath = resolvedDirectory,
                 contentSize = currentDownloadState.value.contentLength ?: 0,
             )
-            renameDialog.onConfirmSave = { newFileName, directoryPath ->
+            renameDialog.onConfirmSave = { newFileName, directoryPath, rememberAsDefault ->
                 dismissRenameDialog()
                 dismissDownloadDialogs()
-                val finalDir = directoryPath.ifBlank { DownloadLocationResolver.resolveTargetDirectory(requireContext().applicationContext) }
+                val finalDir = directoryPath.ifBlank { DownloadLocationResolver.resolveTargetDirectory(appCtx) }
+                if (rememberAsDefault && finalDir.isNotBlank()) {
+                    SettingsPrefs.setString(appCtx, "custom_download_uri", finalDir)
+                }
                 val downloadState = currentDownloadState.value.copy(fileName = newFileName, directoryPath = finalDir)
                 positiveAction.value.invoke(downloadState)
             }

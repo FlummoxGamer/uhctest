@@ -5,7 +5,6 @@ import androidx.navigation.NavController
 import kotlinx.coroutines.CoroutineScope
 import mozilla.components.lib.state.Middleware
 import mozilla.components.support.utils.DefaultDownloadFileUtils
-import mozilla.components.support.utils.DownloadFileUtils
 import app.harvester.companion.UHApp
 import app.harvester.companion.core.downloads.DownloadLocationResolver
 import app.harvester.companion.core.downloads.UhDefaultFileSizeFormatter
@@ -37,10 +36,12 @@ object UhDownloadUIMiddlewareProvider {
         return listOf(
             UhDownloadUIMapperMiddleware(
                 browserStore = components.store,
+                waitingForNetworkIdsFlow = components.waitingForNetworkIds,
                 fileItemDescriptionProvider = UhDefaultFileItemDescriptionProvider(
                     context = applicationContext,
                     fileSizeFormatter = UhDefaultFileSizeFormatter(applicationContext),
                     downloadEstimator = UhDownloadEstimator(DefaultDateTimeProvider()),
+                    isWaitingForNetwork = { id -> id in components.waitingForNetworkIds.value },
                 ),
                 scope = coroutineScope,
             ),

@@ -12,10 +12,11 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.fragment.app.viewModels
 import androidx.navigation.fragment.findNavController
-import app.harvester.companion.CustomizeHomeActivity
 import app.harvester.companion.R
 import app.harvester.companion.UHLog
+import app.harvester.companion.WallpaperStore
 import app.harvester.companion.browser.BrowserViewModel
+import app.harvester.companion.settings.appearance.CustomizeHomeActivity
 import app.harvester.companion.theme.UHTheme
 
 class HomeFragment : Fragment() {
@@ -29,7 +30,15 @@ class HomeFragment : Fragment() {
         savedInstanceState: Bundle?
     ): View = ComposeView(requireContext()).apply {
         setContent {
-            UHTheme {
+            val wallpaperState by WallpaperStore.wallpaperFlow(requireContext()).collectAsState()
+            val isEditing by browserViewModel.isEditing.collectAsState()
+            val lightStatusOverride = if (!isEditing) wallpaperState.isTopDark?.let { !it } else null
+            val lightNavOverride = if (!isEditing) wallpaperState.isBottomDark?.let { !it } else null
+
+            UHTheme(
+                lightStatusBarOverride = lightStatusOverride,
+                lightNavigationBarOverride = lightNavOverride
+            ) {
                 val shortcuts by homeViewModel.shortcuts.collectAsState()
                 val wpPath by homeViewModel.wallpaperPath.collectAsState()
                 val isVideo by homeViewModel.isVideo.collectAsState()

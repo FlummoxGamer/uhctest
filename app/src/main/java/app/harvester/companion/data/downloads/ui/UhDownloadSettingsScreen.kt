@@ -4,35 +4,28 @@ import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.harvester.companion.R
@@ -42,17 +35,18 @@ import app.harvester.companion.core.downloads.DownloadLocationResolver
 import app.harvester.companion.settings.components.SettingsCategory
 import app.harvester.companion.settings.components.SettingsRow
 import app.harvester.companion.settings.components.SettingsSwitchRow
+import app.harvester.companion.settings.components.UhSettingsCardGroup
+import app.harvester.companion.settings.components.UhSettingsDivider
+import app.harvester.companion.settings.components.UhSettingsScaffold
 import app.harvester.companion.settings.downloads.DefaultAndroidFileUtils
 import app.harvester.companion.settings.downloads.DefaultDownloadLocationFormatter
 import app.harvester.companion.settings.downloads.MissingUriPermission
-import app.harvester.companion.theme.UHTheme
 
 @Composable
 fun UhDownloadSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var deleteBehavior by remember { mutableStateOf(SettingsPrefs.getString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "ask")) }
     val customDownloadUri by SettingsPrefs.customDownloadUriFlow(context).collectAsState()
-
     val downloadLocationFormatter = remember { DefaultDownloadLocationFormatter(DefaultAndroidFileUtils(context)) }
 
     BackHandler(onBack = onBack)
@@ -71,125 +65,85 @@ fun UhDownloadSettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    UHTheme {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            painterResource(id = R.drawable.ic_back),
-                            contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Text(
-                        text = "Download Settings",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                }
+    val currentPath = customDownloadUri.ifBlank {
+        DownloadLocationResolver.resolveDefaultConfiguredDirectory(context)
+    }
+    val displayPath = try {
+        downloadLocationFormatter.getFriendlyPath(currentPath)
+    } catch (_: MissingUriPermission) {
+        DownloadLocationResolver.resolveDefaultConfiguredDirectory(context)
+    }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp)
-                        .navigationBarsPadding()
-                ) {
-                    key("cat_general") { SettingsCategory("General") }
-                    key("row_ask_dl") { SettingsSwitchRow("Ask before downloading", SettingsPrefs.K_ASK_DL, default = true) }
+    val stat = android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path)
+    val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+    val totalBytes = stat.blockCountLong * stat.blockSizeLong
+    val usedBytes = totalBytes - freeBytes
+    val progress = if (totalBytes > 0L) usedBytes.toFloat() / totalBytes.toFloat() else 0f
+    val freeGb = freeBytes / (1024f * 1024f * 1024f)
 
-                    key("cat_storage") { SettingsCategory("Storage") }
+    UhSettingsScaffold(
+        title = "Download Settings",
+        onBack = onBack
+    ) {
+        SettingsCategory("General")
+        UhSettingsCardGroup {
+            SettingsSwitchRow(
+                title = "Ask before downloading",
+                subtitle = "Choose filename and folder before saving",
+                key = SettingsPrefs.K_ASK_DL,
+                default = true,
+                iconRes = R.drawable.fx_ic_downloads_24,
+                insideCard = true
+            )
+        }
 
-                    val currentPath = customDownloadUri.ifBlank {
-                        DownloadLocationResolver.resolveDefaultConfiguredDirectory(context)
-                    }
-                    val displayPath = try {
-                        downloadLocationFormatter.getFriendlyPath(currentPath)
-                    } catch (e: MissingUriPermission) {
-                        UHLog.w("download_warn", "Missing URI permission for saved download location; showing default.")
-                        DownloadLocationResolver.resolveDefaultConfiguredDirectory(context)
-                    }
-
-                    key("row_dl_location") {
-                        SettingsRow(
-                            title = "Download Location",
-                            subtitle = displayPath,
-                            onClick = {
-                                try {
-                                    folderLauncher.launch(null)
-                                } catch (e: Exception) {
-                                    UHLog.throwable("download_error", "Failed opening folder picker", e)
-                                }
-                            }
-                        )
-                    }
-
-                    val stat = android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path)
-                    val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
-                    val totalBytes = stat.blockCountLong * stat.blockSizeLong
-                    val usedBytes = totalBytes - freeBytes
-                    val progress = if (totalBytes > 0L) usedBytes.toFloat() / totalBytes.toFloat() else 0f
-
-                    key("storage_progress") {
-                        Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                            Text("Internal Storage", color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
-                            LinearProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                color = if (progress > 0.9f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            val freeGb = freeBytes / (1024f * 1024f * 1024f)
-                            Text("${String.format("%.1f", freeGb)} GB free", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                        }
-                    }
-
-                    key("cat_delete_behavior") { SettingsCategory("Delete Behavior") }
-                    key("text_delete_behavior") {
-                        Text(
-                            "Choose what happens when you delete a download.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                    }
-
-                    key("device") {
-                        DeleteBehaviorRow("Delete from device", "Permanently remove the file", deleteBehavior == "device") {
-                            deleteBehavior = "device"
-                            SettingsPrefs.setString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "device")
-                        }
-                    }
-                    key("history") {
-                        DeleteBehaviorRow("Remove from history", "Keep the file on your device", deleteBehavior == "history") {
-                            deleteBehavior = "history"
-                            SettingsPrefs.setString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "history")
-                        }
-                    }
-                    key("ask") {
-                        DeleteBehaviorRow("Ask every time", "Show a prompt when deleting", deleteBehavior == "ask") {
-                            deleteBehavior = "ask"
-                            SettingsPrefs.setString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "ask")
-                        }
+        SettingsCategory("Storage")
+        UhSettingsCardGroup {
+            SettingsRow(
+                title = "Download Location",
+                subtitle = displayPath,
+                iconRes = R.drawable.fx_ic_folder_24,
+                showChevron = true,
+                insideCard = true,
+                onClick = {
+                    try {
+                        folderLauncher.launch(null)
+                    } catch (e: Exception) {
+                        UHLog.throwable("download_error", "Failed opening folder picker", e)
                     }
                 }
+            )
+            UhSettingsDivider()
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text("Internal Storage", color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(CircleShape),
+                    color = if (progress > 0.9f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+                Text("${String.format("%.1f", freeGb)} GB free", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             }
         }
+
+        SettingsCategory("Delete Behavior")
+        UhSettingsCardGroup {
+            DeleteBehaviorRow("Delete from device", "Permanently remove the file", deleteBehavior == "device") {
+                deleteBehavior = "device"
+                SettingsPrefs.setString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "device")
+            }
+            UhSettingsDivider()
+            DeleteBehaviorRow("Remove from history", "Keep the file on your device", deleteBehavior == "history") {
+                deleteBehavior = "history"
+                SettingsPrefs.setString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "history")
+            }
+            UhSettingsDivider()
+            DeleteBehaviorRow("Ask every time", "Show a prompt when deleting", deleteBehavior == "ask") {
+                deleteBehavior = "ask"
+                SettingsPrefs.setString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "ask")
+            }
+        }
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
@@ -198,12 +152,12 @@ private fun DeleteBehaviorRow(title: String, subtitle: String, selected: Boolean
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .selectable(selected = selected, onClick = onClick)
-            .padding(vertical = 12.dp),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         RadioButton(selected = selected, onClick = onClick)
-        Column(modifier = Modifier.padding(start = 12.dp)) {
+        Column(modifier = Modifier.padding(start = 10.dp)) {
             Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
             Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }

@@ -2,16 +2,23 @@ package app.harvester.companion.data.downloads.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -30,10 +37,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.harvester.companion.R
@@ -45,6 +54,7 @@ import app.harvester.companion.data.downloads.UhHeaderItem
 import app.harvester.companion.data.downloads.ui.components.UhDownloadFilters
 import app.harvester.companion.data.downloads.ui.components.UhDownloadRenameDialog
 import app.harvester.companion.data.downloads.ui.components.UhDownloadSearchBar
+import app.harvester.companion.settings.components.UhWindowHeader
 import app.harvester.companion.theme.UHTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,7 +73,7 @@ fun UhDownloadScreen(
         val state = uiState.deletionSnackbarState
         if (state is UhDownloadUIState.SnackbarState.UndoDeletion) {
             val result = snackbarHostState.showSnackbar(
-                message = "Downloads deleted",
+                message = "Download removed",
                 actionLabel = undoLabel
             )
             if (result == SnackbarResult.ActionPerformed) {
@@ -133,63 +143,77 @@ fun UhDownloadScreen(
             containerColor = MaterialTheme.colorScheme.background,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-                Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
-                    if (uiState.isSearchFieldVisible) {
-                        UhDownloadSearchBar(
-                            query = uiState.searchQuery,
-                            onQueryChanged = { downloadsStore.dispatch(UhDownloadUIAction.SearchQueryEntered(it)) },
-                            onDismiss = { downloadsStore.dispatch(UhDownloadUIAction.SearchBarDismissRequest) }
-                        )
-                    } else {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (uiState.mode is UhDownloadUIState.Mode.Editing) {
-                                IconButton(onClick = { downloadsStore.dispatch(UhDownloadUIAction.ExitEditMode) }) {
-                                    Icon(painterResource(R.drawable.ic_close), "Close", tint = MaterialTheme.colorScheme.onSurface)
+                when {
+                    uiState.isSearchFieldVisible -> {
+                        Box(modifier = Modifier.background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+                            UhDownloadSearchBar(
+                                query = uiState.searchQuery,
+                                onQueryChanged = { downloadsStore.dispatch(UhDownloadUIAction.SearchQueryEntered(it)) },
+                                onDismiss = { downloadsStore.dispatch(UhDownloadUIAction.SearchBarDismissRequest) }
+                            )
+                        }
+                    }
+                    uiState.mode is UhDownloadUIState.Mode.Editing -> {
+                        UhWindowHeader(
+                            title = stringResource(R.string.download_multi_select_title, uiState.mode.selectedItems.size),
+                            onBack = { downloadsStore.dispatch(UhDownloadUIAction.ExitEditMode) },
+                            backIconRes = R.drawable.fx_ic_close_24,
+                            backContentDescription = "Exit selection",
+                            actions = {
+                                IconButton(onClick = { downloadsStore.dispatch(UhDownloadUIAction.AddAllItemsForRemoval) }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.fx_ic_check_24),
+                                        contentDescription = stringResource(R.string.download_select_all_description),
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
                                 }
-                                Text(
-                                    text = stringResource(R.string.download_multi_select_title, uiState.mode.selectedItems.size),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.weight(1f)
-                                )
                                 IconButton(onClick = {
                                     downloadsStore.dispatch(UhDownloadUIAction.RequestDeleteMultiple(uiState.mode.selectedItems))
                                 }) {
-                                    Icon(painterResource(R.drawable.ic_delete), "Delete", tint = MaterialTheme.colorScheme.error)
-                                }
-                            } else {
-                                IconButton(onClick = onBackClick) {
-                                    Icon(painterResource(R.drawable.ic_back), stringResource(R.string.download_navigate_back_description), tint = MaterialTheme.colorScheme.onSurface)
-                                }
-                                Text(
-                                    text = stringResource(R.string.library_downloads),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = { downloadsStore.dispatch(UhDownloadUIAction.SearchBarVisibilityRequest) }) {
-                                    Icon(painterResource(R.drawable.ic_search), stringResource(R.string.download_search_placeholder), tint = MaterialTheme.colorScheme.onSurface)
-                                }
-
-                                IconButton(onClick = {
-                                    downloadsStore.dispatch(UhDownloadUIAction.RequestDeleteMultiple(uiState.items.toSet()))
-                                }) {
-                                    Icon(painterResource(R.drawable.ic_delete), "Clear All", tint = MaterialTheme.colorScheme.error)
-                                }
-
-                                IconButton(onClick = onSettingsClick) {
-                                    Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.download_navigate_settings_description), tint = MaterialTheme.colorScheme.onSurface)
+                                    Icon(
+                                        painter = painterResource(R.drawable.fx_ic_delete_24),
+                                        contentDescription = stringResource(R.string.download_delete_selected_description),
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
                                 }
                             }
-                        }
+                        )
+                    }
+                    else -> {
+                        UhWindowHeader(
+                            title = stringResource(R.string.library_downloads),
+                            onBack = onBackClick,
+                            backContentDescription = stringResource(R.string.download_navigate_back_description),
+                            actions = {
+                                if (uiState.isSearchIconVisible) {
+                                    IconButton(onClick = { downloadsStore.dispatch(UhDownloadUIAction.SearchBarVisibilityRequest) }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.fx_ic_search_24),
+                                            contentDescription = stringResource(R.string.download_search_placeholder),
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                                if (uiState.items.isNotEmpty()) {
+                                    IconButton(onClick = {
+                                        downloadsStore.dispatch(UhDownloadUIAction.RequestDeleteMultiple(uiState.items.toSet()))
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.fx_ic_delete_24),
+                                            contentDescription = "Clear All",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                                IconButton(onClick = onSettingsClick) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.fx_ic_settings_24),
+                                        contentDescription = stringResource(R.string.download_navigate_settings_description),
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -210,17 +234,24 @@ fun UhDownloadScreen(
 
                 when (val state = uiState.itemsState) {
                     is UhDownloadUIState.ItemsState.NoItems -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(stringResource(R.string.download_empty_message_2), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        EmptyDownloadsView(
+                            iconRes = R.drawable.fx_ic_downloads_24,
+                            title = stringResource(R.string.download_empty_message_2),
+                            subtitle = "Files you download from websites appear here"
+                        )
                     }
                     is UhDownloadUIState.ItemsState.NoSearchResults -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(stringResource(R.string.download_search_no_results_found), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        EmptyDownloadsView(
+                            iconRes = R.drawable.fx_ic_search_24,
+                            title = stringResource(R.string.download_search_no_results_found),
+                            subtitle = "Try searching with a different filename"
+                        )
                     }
                     is UhDownloadUIState.ItemsState.Items -> {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = 24.dp)
+                        ) {
                             items(
                                 items = state.items,
                                 key = { item ->
@@ -235,10 +266,10 @@ fun UhDownloadScreen(
                                     is UhHeaderItem -> {
                                         Text(
                                             text = stringResource(id = item.timeCategory.stringRes),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(16.dp)
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp)
                                         )
                                     }
                                     is UhFileItem -> {
@@ -275,5 +306,50 @@ fun UhDownloadScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EmptyDownloadsView(
+    iconRes: Int,
+    title: String,
+    subtitle: String,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(76.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                painter = painterResource(id = iconRes),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(34.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = title,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = subtitle,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center
+        )
     }
 }

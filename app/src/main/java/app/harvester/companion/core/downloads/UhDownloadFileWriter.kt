@@ -99,26 +99,35 @@ class UhDownloadFileWriter(private val context: Context) : DownloadFileWriter {
         }
         val relativePath = effectiveDir.removePrefix("/storage/emulated/0/").ifBlank { Environment.DIRECTORY_DOWNLOADS }
 
-        var uri = download.filePath.takeIf { it.startsWith("content://") }?.let { Uri.parse(it) }
+        var uri = if (append) findExistingFileUri(collection, fileName, effectiveDir) else null
+        var uriChanged = false
 
         if (uri == null) {
-            val existingUri = findExistingFileUri(collection, fileName, effectiveDir)
-            if (existingUri != null && append) {
-                uri = existingUri
-            } else {
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                    put(MediaStore.MediaColumns.IS_PENDING, 1)
-                }
-                uri = resolver.insert(collection, values)
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
+            uri = resolver.insert(collection, values)
+            uriChanged = uri != null
         }
 
         if (uri == null) {
             UHLog.e("download_error", "Failed to insert MediaStore entry for $fileName")
             return
+        }
+        if (uriChanged) {
+            try {
+                resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        val actualName = c.getString(0)
+                        if (!actualName.isNullOrBlank() && actualName != download.fileName) {
+                            onUpdateState(download.copy(fileName = actualName))
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
         }
 
         try {

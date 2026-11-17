@@ -130,6 +130,29 @@ class Components(val context: Context) {
     private val networkResumeLock = Any()
     private val pendingNetworkResumeIds = mutableSetOf<String>()
     private val deferredNetworkResumeIds = mutableSetOf<String>()
+    val waitingForNetworkIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+    fun isNetworkAvailable(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return true
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    fun markWaitingForNetwork(downloadId: String) {
+        synchronized(networkResumeLock) {
+            pendingNetworkResumeIds.add(downloadId)
+            waitingForNetworkIds.value = waitingForNetworkIds.value + downloadId
+        }
+    }
+
+    fun clearWaitingForNetwork(downloadId: String) {
+        synchronized(networkResumeLock) {
+            pendingNetworkResumeIds.remove(downloadId)
+            deferredNetworkResumeIds.remove(downloadId)
+            waitingForNetworkIds.value = waitingForNetworkIds.value - downloadId
+        }
+    }
 
     val downloadMiddleware: UhDownloadMiddleware by lazy {
         UhDownloadMiddleware(
@@ -139,7 +162,11 @@ class Components(val context: Context) {
                 SettingsPrefs.getString(context, SettingsPrefs.K_DELETE_BEHAVIOR, "ask") == "device"
             },
             downloadFileUtils = downloadFileUtils,
-            downloadStorage = downloadStorage
+            downloadStorage = downloadStorage,
+            isNetworkAvailableProvider = { isNetworkAvailable() },
+            isWaitingForNetworkProvider = { id -> id in waitingForNetworkIds.value },
+            onMarkedWaitingForNetwork = { id -> markWaitingForNetwork(id) },
+            onClearedWaitingForNetwork = { id -> clearWaitingForNetwork(id) },
         )
     }
 
@@ -161,29 +188,37 @@ class Components(val context: Context) {
         try {
             connectivityManager.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onLost(network: android.net.Network) {
-                    val activeIds = browserStore.state.downloads.values
-                        .filter {
-                            it.status == DownloadState.Status.DOWNLOADING ||
-                                it.status == DownloadState.Status.INITIATED
+                    if (isNetworkAvailable()) return
+                    val activeDownloads = browserStore.state.downloads.values.filter {
+                        it.status == DownloadState.Status.DOWNLOADING ||
+                            it.status == DownloadState.Status.INITIATED
+                    }
+                    if (activeDownloads.isNotEmpty()) {
+                        activeDownloads.forEach { dl ->
+                            markWaitingForNetwork(dl.id)
+                            val pauseIntent = Intent(mozilla.components.feature.downloads.AbstractFetchDownloadService.ACTION_PAUSE).apply {
+                                setPackage(context.packageName)
+                                putExtra("downloadId", dl.id)
+                                putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, dl.id)
+                                putExtra("INTENT_EXTRA_DOWNLOAD_ID", dl.id)
+                            }
+                            context.sendBroadcast(pauseIntent)
+                            browserStore.dispatch(DownloadAction.UpdateDownloadAction(dl.copy(status = DownloadState.Status.PAUSED)))
                         }
-                        .map { it.id }
-                    if (activeIds.isNotEmpty()) {
-                        synchronized(networkResumeLock) {
-                            pendingNetworkResumeIds.addAll(activeIds)
-                        }
-                        UHLog.w("download_warn", "Network connection lost during ${activeIds.size} active download(s); queued for auto-resume.")
+                        UHLog.w("download_warn", "Network lost; paused ${activeDownloads.size} download(s) in Waiting for Network state.")
                     }
                 }
 
                 override fun onAvailable(network: android.net.Network) {
                     val trackedIds = synchronized(networkResumeLock) {
-                        val copy = (pendingNetworkResumeIds + deferredNetworkResumeIds).toSet()
+                        val copy = (pendingNetworkResumeIds + deferredNetworkResumeIds + waitingForNetworkIds.value).toSet()
                         pendingNetworkResumeIds.clear()
                         copy
                     }
                     val candidates = browserStore.state.downloads.values.filter { dl ->
-                        dl.status == DownloadState.Status.FAILED ||
-                            (dl.id in trackedIds && dl.status != DownloadState.Status.COMPLETED && dl.status != DownloadState.Status.CANCELLED && dl.status != DownloadState.Status.PAUSED)
+                        dl.id in trackedIds &&
+                            dl.status != DownloadState.Status.COMPLETED &&
+                            dl.status != DownloadState.Status.CANCELLED
                     }
                     if (candidates.isNotEmpty()) {
                         attemptResumeDownloads(browserStore, candidates)
@@ -196,14 +231,15 @@ class Components(val context: Context) {
     }
 
     fun resumePendingNetworkDownloads() {
+        if (!isNetworkAvailable()) return
         val ids = synchronized(networkResumeLock) {
-            if (deferredNetworkResumeIds.isEmpty()) return
-            val copy = deferredNetworkResumeIds.toSet()
+            val combined = (deferredNetworkResumeIds + waitingForNetworkIds.value).toSet()
+            if (combined.isEmpty()) return
             deferredNetworkResumeIds.clear()
-            copy
+            combined
         }
         val candidates = store.state.downloads.values.filter {
-            it.id in ids && (it.status == DownloadState.Status.FAILED || it.status == DownloadState.Status.INITIATED)
+            it.id in ids && (it.status == DownloadState.Status.PAUSED || it.status == DownloadState.Status.FAILED || it.status == DownloadState.Status.INITIATED)
         }
         if (candidates.isNotEmpty()) {
             attemptResumeDownloads(store, candidates)
@@ -213,24 +249,31 @@ class Components(val context: Context) {
     private fun attemptResumeDownloads(browserStore: BrowserStore, downloads: List<DownloadState>) {
         downloads.forEach { download ->
             try {
-                val broadcast = Intent(mozilla.components.feature.downloads.AbstractFetchDownloadService.ACTION_TRY_AGAIN).apply {
+                val resumeAction = if (download.status == DownloadState.Status.FAILED && download.currentBytesCopied == 0L) {
+                    mozilla.components.feature.downloads.AbstractFetchDownloadService.ACTION_TRY_AGAIN
+                } else {
+                    mozilla.components.feature.downloads.AbstractFetchDownloadService.ACTION_RESUME
+                }
+
+                val broadcast = Intent(resumeAction).apply {
                     setPackage(context.packageName)
-                    putExtra("INTENT_EXTRA_DOWNLOAD_ID", download.id)
+                    putExtra("downloadId", download.id)
                     putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, download.id)
+                    putExtra("INTENT_EXTRA_DOWNLOAD_ID", download.id)
                 }
                 context.sendBroadcast(broadcast)
 
-                val resumedState = download.copy(status = DownloadState.Status.INITIATED)
+                val resumedState = download.copy(status = DownloadState.Status.DOWNLOADING)
                 browserStore.dispatch(DownloadAction.UpdateDownloadAction(resumedState))
 
                 val serviceIntent = Intent(context, UhDownloadService::class.java).apply {
+                    action = resumeAction
+                    putExtra("downloadId", download.id)
                     putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, download.id)
                     putExtra("INTENT_EXTRA_DOWNLOAD_ID", download.id)
                 }
                 ContextCompat.startForegroundService(context, serviceIntent)
-                synchronized(networkResumeLock) {
-                    deferredNetworkResumeIds.remove(download.id)
-                }
+                clearWaitingForNetwork(download.id)
             } catch (e: Exception) {
                 synchronized(networkResumeLock) {
                     deferredNetworkResumeIds.add(download.id)

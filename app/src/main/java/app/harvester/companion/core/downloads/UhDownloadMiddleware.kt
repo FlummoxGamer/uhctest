@@ -29,6 +29,10 @@ class UhDownloadMiddleware(
     private val deleteFileFromStorage: () -> Boolean,
     private val downloadFileUtils: DownloadFileUtils,
     private val downloadStorage: UhDownloadStorage = UhDownloadStorage(applicationContext),
+    private val isNetworkAvailableProvider: () -> Boolean = { true },
+    private val isWaitingForNetworkProvider: (String) -> Boolean = { false },
+    private val onMarkedWaitingForNetwork: (String) -> Unit = {},
+    private val onClearedWaitingForNetwork: (String) -> Unit = {},
 ) : Middleware<BrowserState, BrowserAction> {
 
     private val scope = CoroutineScope(
@@ -42,10 +46,29 @@ class UhDownloadMiddleware(
         next: (BrowserAction) -> Unit,
         action: BrowserAction,
     ) {
+        var effectiveAction = action
         when (action) {
-            is DownloadAction.RemoveDownloadAction -> removeDownload(action.downloadId, action.removeFromDisk, store)
+            is DownloadAction.RemoveDownloadAction -> {
+                onClearedWaitingForNetwork(action.downloadId)
+                removeDownload(action.downloadId, action.removeFromDisk, store)
+            }
             is DownloadAction.RemoveAllDownloadsAction -> removeDownloads()
-            is DownloadAction.UpdateDownloadAction -> updateDownload(action.download, store)
+            is DownloadAction.UpdateDownloadAction -> {
+                val updated = if (
+                    action.download.status == DownloadState.Status.FAILED &&
+                    (!isNetworkAvailableProvider() || isWaitingForNetworkProvider(action.download.id))
+                ) {
+                    onMarkedWaitingForNetwork(action.download.id)
+                    action.download.copy(status = DownloadState.Status.PAUSED)
+                } else {
+                    if (action.download.status == DownloadState.Status.COMPLETED || action.download.status == DownloadState.Status.CANCELLED) {
+                        onClearedWaitingForNetwork(action.download.id)
+                    }
+                    action.download
+                }
+                effectiveAction = DownloadAction.UpdateDownloadAction(updated)
+                updateDownload(updated, store)
+            }
             is DownloadAction.RestoreDownloadsStateAction -> restoreDownloads(store)
             is DownloadAction.RemoveDeletedDownloads -> removeDeletedDownloads(store)
             is ContentAction.CancelDownloadAction -> closeDownloadResponse(store, action.sessionId)
@@ -57,9 +80,9 @@ class UhDownloadMiddleware(
             else -> {}
         }
 
-        next(action)
+        next(effectiveAction)
 
-        when (action) {
+        when (effectiveAction) {
             is TabListAction.RemoveAllTabsAction,
             is TabListAction.RemoveAllPrivateTabsAction -> removePrivateNotifications(store)
             is TabListAction.RemoveTabsAction,
@@ -69,8 +92,8 @@ class UhDownloadMiddleware(
                     removePrivateNotifications(store)
                 }
             }
-            is DownloadAction.AddDownloadAction -> sendDownloadIntent(action.download)
-            is DownloadAction.RestoreDownloadStateAction -> sendDownloadIntent(action.download)
+            is DownloadAction.AddDownloadAction -> sendDownloadIntent(effectiveAction.download)
+            is DownloadAction.RestoreDownloadStateAction -> sendDownloadIntent(effectiveAction.download)
             else -> {}
         }
     }
@@ -138,11 +161,16 @@ class UhDownloadMiddleware(
 
     private fun restoreDownloads(store: Store<BrowserState, BrowserAction>) = scope.launch {
         downloadStorage.getDownloadsList().forEach { download ->
-            if (!downloadExists(download) &&
-                download.status != DownloadState.Status.DOWNLOADING) {
+            val canBeMissingPartial = download.status == DownloadState.Status.DOWNLOADING ||
+                download.status == DownloadState.Status.PAUSED ||
+                download.status == DownloadState.Status.INITIATED
+            if (!downloadExists(download) && !canBeMissingPartial) {
                 downloadStorage.remove(download)
             } else if (!store.state.downloads.containsKey(download.id) && !download.private) {
-                store.dispatch(DownloadAction.RestoreDownloadStateAction(download))
+                val restored = if (download.status == DownloadState.Status.DOWNLOADING) {
+                    download.copy(status = DownloadState.Status.PAUSED)
+                } else download
+                store.dispatch(DownloadAction.RestoreDownloadStateAction(restored))
             }
         }
     }
@@ -161,9 +189,18 @@ class UhDownloadMiddleware(
     }
 
     private fun sendDownloadIntent(download: DownloadState) {
-        if (download.status !in arrayOf(DownloadState.Status.COMPLETED, DownloadState.Status.CANCELLED, DownloadState.Status.FAILED)) {
-            val intent = Intent(applicationContext, downloadServiceClass)
-            intent.putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, download.id)
+        if (download.status !in arrayOf(
+                DownloadState.Status.COMPLETED,
+                DownloadState.Status.CANCELLED,
+                DownloadState.Status.FAILED,
+                DownloadState.Status.PAUSED,
+            )
+        ) {
+            val intent = Intent(applicationContext, downloadServiceClass).apply {
+                putExtra("downloadId", download.id)
+                putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, download.id)
+                putExtra("INTENT_EXTRA_DOWNLOAD_ID", download.id)
+            }
             try {
                 ContextCompat.startForegroundService(applicationContext, intent)
             } catch (e: Exception) {
