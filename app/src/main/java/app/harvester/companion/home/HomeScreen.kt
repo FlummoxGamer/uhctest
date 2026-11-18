@@ -119,16 +119,15 @@ fun HomeScreen(
         ) {
             Spacer(modifier = Modifier.weight(if (isLandscape) 0.05f else 0.3f))
 
-            if (!isLandscape) {
-                Text(
-                    text = "Universal Harvester",
-                    color = textColor,
-                    fontSize = 48.sp,
-                    fontFamily = FontFamily(Font(R.font.logo_font)),
-                    style = TextStyle(shadow = Shadow(color = shadowColor, offset = Offset(0f, 2f), blurRadius = 8f)),
-                    modifier = Modifier.padding(bottom = 36.dp)
-                )
-            }
+            Text(
+                text = app.harvester.companion.UHBrand.NAME,
+                color = textColor,
+                fontSize = if (isLandscape) 28.sp else 46.sp,
+                fontFamily = FontFamily(Font(R.font.logo_font)),
+                letterSpacing = if (isLandscape) 2.sp else 3.sp,
+                style = TextStyle(shadow = Shadow(color = shadowColor, offset = Offset(0f, 2f), blurRadius = if (isLandscape) 6f else 8f)),
+                modifier = Modifier.padding(bottom = if (isLandscape) 10.dp else 28.dp)
+            )
 
             LazyVerticalGrid(
                 state = gridState,

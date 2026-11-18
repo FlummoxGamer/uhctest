@@ -54,6 +54,8 @@ class UhDownloadFileWriter(private val context: Context) : DownloadFileWriter {
             val existing = treeDoc.findFile(fileName)
             val targetDoc = if (append && existing != null) {
                 existing
+            } else if (existing != null && !append) {
+                existing
             } else {
                 treeDoc.createFile(mimeType, fileName)
             }
@@ -62,7 +64,7 @@ class UhDownloadFileWriter(private val context: Context) : DownloadFileWriter {
                 return false
             }
             val resolvedName = targetDoc.name
-            if (!resolvedName.isNullOrBlank() && resolvedName != download.fileName) {
+            if (!append && !resolvedName.isNullOrBlank() && resolvedName != download.fileName) {
                 onUpdateState(download.copy(fileName = resolvedName))
             }
             val mode = if (append) "wa" else "w"
@@ -103,21 +105,26 @@ class UhDownloadFileWriter(private val context: Context) : DownloadFileWriter {
         var uriChanged = false
 
         if (uri == null) {
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            val existing = findExistingFileUri(collection, fileName, effectiveDir)
+            if (existing != null && append) {
+                uri = existing
+            } else {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                uri = resolver.insert(collection, values)
+                uriChanged = uri != null
             }
-            uri = resolver.insert(collection, values)
-            uriChanged = uri != null
         }
 
         if (uri == null) {
             UHLog.e("download_error", "Failed to insert MediaStore entry for $fileName")
             return
         }
-        if (uriChanged) {
+        if (uriChanged && !append) {
             try {
                 resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                     if (c.moveToFirst()) {
@@ -175,15 +182,17 @@ class UhDownloadFileWriter(private val context: Context) : DownloadFileWriter {
 
     private fun findExistingFileUri(collection: Uri, fileName: String, directoryPath: String): Uri? {
         val projection = arrayOf(MediaStore.MediaColumns._ID)
-        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
-        val selectionArgs = arrayOf(fileName, "%${directoryPath.substringAfterLast("/")}%")
+        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+        val selectionArgs = arrayOf(fileName)
 
-        context.contentResolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
-                return Uri.withAppendedPath(collection, id.toString())
+        try {
+            context.contentResolver.query(collection, projection, selection, selectionArgs, "${MediaStore.MediaColumns._ID} DESC")?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                    return Uri.withAppendedPath(collection, id.toString())
+                }
             }
-        }
+        } catch (_: Exception) {}
         return null
     }
 }

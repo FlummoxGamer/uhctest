@@ -236,6 +236,23 @@ class BrowserFragment : Fragment() {
         }
         ViewCompat.requestApplyInsets(binding.browserLayout)
 
+        val backCallback = object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (onBackPressed()) {
+                    return
+                }
+                isEnabled = false
+                val nav = try { androidx.navigation.fragment.NavHostFragment.findNavController(this@BrowserFragment) } catch (_: Exception) { null }
+                if (nav != null && nav.currentDestination?.id == R.id.browserFragment) {
+                    nav.popBackStack()
+                } else {
+                    requireActivity().onBackPressedDispatcher.onBackPressed()
+                }
+                isEnabled = true
+            }
+        }
+        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
+
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.isBarBottom.collect {
@@ -391,6 +408,87 @@ class BrowserFragment : Fragment() {
             return true
         }
         return false
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val preview = app.harvester.companion.browser.tabs.TabPreviewCache.getLastActiveBitmap()
+        if (preview != null && !preview.isRecycled && _binding != null) {
+            binding.tabPreviewOverlay.setImageBitmap(preview)
+            binding.tabPreviewOverlay.visibility = View.VISIBLE
+            binding.tabPreviewOverlay.alpha = 1f
+            binding.tabPreviewOverlay.postDelayed({
+                if (_binding != null) {
+                    binding.tabPreviewOverlay.animate()
+                        .alpha(0f)
+                        .setDuration(250)
+                        .withEndAction {
+                            if (_binding != null) {
+                                binding.tabPreviewOverlay.visibility = View.GONE
+                                binding.tabPreviewOverlay.alpha = 1f
+                            }
+                        }
+                        .start()
+                }
+            }, 450)
+        }
+    }
+
+    override fun onPause() {
+        captureCurrentTabPreview()
+        super.onPause()
+    }
+
+    private fun captureCurrentTabPreview(onComplete: ((android.graphics.Bitmap?) -> Unit)? = null) {
+        if (!isAdded || _binding == null) {
+            onComplete?.invoke(null)
+            return
+        }
+        val currentTab = (requireContext().applicationContext as? UHApp)?.components?.store?.state?.selectedTab ?: return
+        val engineView = if (binding.swipeRefresh.childCount > 0) binding.swipeRefresh.getChildAt(0) else null
+        if (engineView == null) {
+            onComplete?.invoke(null)
+            return
+        }
+        val surfaceView = findSurfaceView(engineView)
+        if (surfaceView != null && surfaceView.width > 0 && surfaceView.height > 0) {
+            try {
+                val bitmap = android.graphics.Bitmap.createBitmap(surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888)
+                android.view.PixelCopy.request(surfaceView, bitmap, { result ->
+                    if (result == android.view.PixelCopy.SUCCESS) {
+                        app.harvester.companion.browser.tabs.TabPreviewCache.put(currentTab.id, bitmap)
+                        onComplete?.invoke(bitmap)
+                    } else {
+                        onComplete?.invoke(null)
+                    }
+                }, android.os.Handler(android.os.Looper.getMainLooper()))
+                return
+            } catch (e: Exception) {
+                UHLog.w("preview_warn", "Surface PixelCopy failed: ${e.message}")
+            }
+        }
+        try {
+            if (engineView.width > 0 && engineView.height > 0) {
+                val bmp = android.graphics.Bitmap.createBitmap(engineView.width, engineView.height, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bmp)
+                engineView.draw(canvas)
+                app.harvester.companion.browser.tabs.TabPreviewCache.put(currentTab.id, bmp)
+                onComplete?.invoke(bmp)
+                return
+            }
+        } catch (_: Exception) {}
+        onComplete?.invoke(null)
+    }
+
+    private fun findSurfaceView(view: View): android.view.SurfaceView? {
+        if (view is android.view.SurfaceView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val found = findSurfaceView(view.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     override fun onStart() {

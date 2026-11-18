@@ -112,6 +112,22 @@ fun UhGlobalToolbar(
         }
     }
 
+    val openTabsTray = {
+        val activity = context as? AppCompatActivity
+        if (activity == null) {
+            UHLog.e("ui_error", "Cannot open TabsTray: Context is not AppCompatActivity.")
+        } else {
+            try {
+                app.harvester.companion.browser.tabs.TabsTrayDialogFragment.newInstance().show(
+                    activity.supportFragmentManager,
+                    app.harvester.companion.browser.tabs.TabsTrayDialogFragment.TAG
+                )
+            } catch (e: Exception) {
+                UHLog.throwable("ui_error", "Failed to show TabsTray", e)
+            }
+        }
+    }
+
     val onSearchSubmit = { query: String ->
         val target = viewModel.normalize(query)
         if (target.isBlank()) {
@@ -165,7 +181,7 @@ fun UhGlobalToolbar(
                         onLockClick = openTrustPanel,
                         onScriptMenuClick = {},
                         onMenuClick = openMainMenu,
-                        onTabCountClick = {},
+                        onTabCountClick = openTabsTray,
                         searchEngine = searchEngine
                     )
                 },
@@ -203,7 +219,7 @@ fun UhGlobalToolbar(
                     onLockClick = openTrustPanel,
                     onScriptMenuClick = {},
                     onMenuClick = openMainMenu,
-                    onTabCountClick = {},
+                    onTabCountClick = openTabsTray,
                     searchEngine = searchEngine,
                     modifier = barPositionModifier
                 )

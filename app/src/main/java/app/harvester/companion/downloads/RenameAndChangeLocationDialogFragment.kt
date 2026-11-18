@@ -68,7 +68,7 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
         dialog?.window?.apply {
             clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
             setBackgroundDrawableResource(android.R.color.transparent)
-            val widthPx = (resources.displayMetrics.widthPixels * 0.92f).toInt().coerceAtMost((420f * resources.displayMetrics.density).toInt())
+            val widthPx = (resources.displayMetrics.widthPixels * 0.88f).toInt().coerceAtMost((330f * resources.displayMetrics.density).toInt())
             setLayout(widthPx, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
     }
@@ -117,25 +117,20 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
                 UHTheme {
                     val friendlyPath = try {
                         downloadLocationFormatter.getFriendlyPath(dialogState.directoryPath)
-                    } catch (e: MissingUriPermission) {
+                    } catch (e: Exception) {
                         if (dialogState.directoryPath.startsWith("content://")) {
-                            Uri.parse(dialogState.directoryPath).lastPathSegment?.substringAfterLast(':')
-                                ?.takeIf { it.isNotBlank() } ?: "Selected folder"
+                            val seg = Uri.parse(dialogState.directoryPath).lastPathSegment?.substringAfterLast(':')
+                            if (!seg.isNullOrBlank()) seg else "Selected folder"
                         } else {
-                            UHLog.w("download_warn", "Missing URI permission for ${dialogState.directoryPath}; falling back to default directory")
-                            val defaultLocation = DownloadLocationResolver.resolveDefaultConfiguredDirectory(ctx)
-                            if (dialogState.directoryPath != defaultLocation) {
-                                dialogState = dialogState.copy(directoryPath = defaultLocation)
-                            }
-                            downloadLocationFormatter.getFriendlyPath(defaultLocation)
+                            dialogState.directoryPath.substringAfterLast('/').ifBlank { "Downloads" }
                         }
                     }
 
                     Surface(
-                        shape = RoundedCornerShape(24.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         tonalElevation = 6.dp,
-                        modifier = Modifier.widthIn(max = 420.dp)
+                        modifier = Modifier.widthIn(max = 330.dp)
                     ) {
                         RenameAndChangeLocationDialogContent(
                             dialogState = dialogState,
@@ -157,13 +152,19 @@ class RenameAndChangeLocationDialogFragment : DialogFragment(), OnEnterAnimation
                                 val finalName = dialogState.fileName
                                 val finalDir = dialogState.directoryPath
                                 val rememberDefault = dialogState.rememberAsDefault
-                                dismissAllowingStateLoss()
+                                try {
+                                    dialog?.dismiss()
+                                    dismissAllowingStateLoss()
+                                } catch (_: Exception) {}
                                 onConfirmSave(finalName, finalDir, rememberDefault)
                             },
                             onCancel = {
                                 if (isActionHandled) return@RenameAndChangeLocationDialogContent
                                 isActionHandled = true
-                                dismissAllowingStateLoss()
+                                try {
+                                    dialog?.dismiss()
+                                    dismissAllowingStateLoss()
+                                } catch (_: Exception) {}
                                 onCancel()
                             },
                         )

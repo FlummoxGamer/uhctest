@@ -225,11 +225,25 @@ object UhSearchDataProvider {
         val trimmed = body.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
         val out = mutableListOf<String>()
         if (trimmed.startsWith("<")) {
-            val itemRegex = Regex("<(?:item|entry)\\b[^>]*>[\\s\\S]*?<title(?:\\s+[^>]*)?>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/title>[\\s\\S]*?<\\/(?:item|entry)>", RegexOption.IGNORE_CASE)
+            val itemRegex = Regex("<(?:item|entry)\\b[^>]*>([\\s\\S]*?)<\\/(?:item|entry)>", RegexOption.IGNORE_CASE)
             for (match in itemRegex.findAll(trimmed)) {
-                val decoded = Html.fromHtml(match.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString().trim()
-                if (decoded.isNotBlank() && !decoded.equals("Daily Search Trends", ignoreCase = true)) {
-                    out.add(decoded)
+                val itemBlock = match.groupValues[1]
+                val titleMatch = Regex("<title(?:\\s+[^>]*)?>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/title>", RegexOption.IGNORE_CASE).find(itemBlock)
+                if (titleMatch != null) {
+                    var decoded = Html.fromHtml(titleMatch.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString().trim()
+                    if (decoded.contains(" - ")) {
+                        decoded = decoded.substringBeforeLast(" - ").trim()
+                    }
+                    if (decoded.contains(" | ")) {
+                        decoded = decoded.substringBeforeLast(" | ").trim()
+                    }
+                    if (decoded.isNotBlank() &&
+                        !decoded.equals("Daily Search Trends", ignoreCase = true) &&
+                        !decoded.equals("Trending Searches", ignoreCase = true) &&
+                        decoded.length <= 55
+                    ) {
+                        out.add(decoded)
+                    }
                 }
             }
         } else if (trimmed.startsWith("[")) {

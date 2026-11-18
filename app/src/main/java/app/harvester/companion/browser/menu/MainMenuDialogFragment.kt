@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,14 +19,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +51,8 @@ import app.harvester.companion.UHApp
 import app.harvester.companion.UHLog
 import app.harvester.companion.settings.SettingsActivity
 import app.harvester.companion.settings.addons.ScriptsActivity
+import app.harvester.companion.settings.appearance.CustomizeHomeActivity
+import app.harvester.companion.settings.tools.ToolsActivity
 import app.harvester.companion.theme.UHTheme
 import mozilla.components.browser.state.selector.selectedTab
 import com.google.android.material.R as materialR
@@ -87,140 +96,123 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val isHome = arguments?.getBoolean(ARG_IS_HOME) ?: true
-        val components = (requireActivity().application as UHApp).components
+        val app = requireActivity().application as UHApp
+        val components = app.components
+
         return ComposeView(requireContext()).apply {
             setContent {
                 UHTheme {
                     val browserState by components.store.stateFlow.collectAsState()
                     val selectedTab = browserState.selectedTab
                     val isDesktopMode = selectedTab?.content?.desktopMode == true
+                    val canGoBack = selectedTab?.content?.canGoBack == true
+                    val canGoForward = selectedTab?.content?.canGoForward == true
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    Surface(
+                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp, 4.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
-                                .align(Alignment.CenterHorizontally)
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            key("fav") {
-                                TopRowItem("Favorites", R.drawable.ic_favorites, Modifier.weight(1f)) {
-                                    dismissAllowingStateLoss()
-                                }
-                            }
-                            key("history") {
-                                TopRowItem("History", R.drawable.ic_history, Modifier.weight(1f)) {
-                                    navigateSafe(R.id.historyFragment)
-                                }
-                            }
-                            key("downloads") {
-                                TopRowItem("Downloads", R.drawable.fx_ic_downloads_24, Modifier.weight(1f)) {
-                                    navigateSafe(R.id.downloadsFragment)
-                                }
-                            }
-                            key("playlist") {
-                                TopRowItem("Playlist", R.drawable.ic_playlist, Modifier.weight(1f)) {
-                                    dismissAllowingStateLoss()
-                                }
-                            }
-                        }
-
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(vertical = 8.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            if (!isHome) {
-                                MenuRowItem(R.drawable.ic_menu_translate, "Translate") { dismissAllowingStateLoss() }
-                                MenuRowItem(R.drawable.ic_menu_find, "Find in Page") { dismissAllowingStateLoss() }
-                                MenuRowItem(
-                                    iconRes = if (isDesktopMode) R.drawable.ic_menu_mobile else R.drawable.ic_menu_desktop,
-                                    label = if (isDesktopMode) "Request Mobile Site" else "Request Desktop Site"
-                                ) {
-                                    dismissAllowingStateLoss()
-                                    selectedTab?.let { tab ->
-                                        components.useCases.sessionUseCases.requestDesktopSite(!isDesktopMode, tab.id)
-                                    } ?: UHLog.w("ui_warn", "Request desktop site clicked with no active tab.")
-                                }
-                                MenuRowItem(R.drawable.ic_menu_add_home, "Add to Home Screen") { dismissAllowingStateLoss() }
-                                MenuRowItem(R.drawable.ic_menu_dev, "Developer Tools") { dismissAllowingStateLoss() }
+                            // Drag Handle
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp, 4.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+                            )
 
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                                        .height(1.dp)
-                                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (isHome) {
+                                // Home 3-Dot Menu State
+                                HomeMenuState(
+                                    onHistory = { navigateSafe(R.id.historyFragment) },
+                                    onDownloads = { navigateSafe(R.id.downloadsFragment) },
+                                    onCaptureTools = {
+                                        dismissAllowingStateLoss()
+                                        context.startActivity(Intent(context, ToolsActivity::class.java))
+                                    },
+                                    onSettings = {
+                                        dismissAllowingStateLoss()
+                                        context.startActivity(Intent(context, SettingsActivity::class.java))
+                                    },
+                                    onCustomizeHome = {
+                                        dismissAllowingStateLoss()
+                                        context.startActivity(Intent(context, CustomizeHomeActivity::class.java))
+                                    },
+                                    onScripts = {
+                                        dismissAllowingStateLoss()
+                                        context.startActivity(Intent(context, ScriptsActivity::class.java))
+                                    },
+                                    onQuit = {
+                                        dismissAllowingStateLoss()
+                                        activity?.finish()
+                                    }
+                                )
+                            } else {
+                                // Browser 3-Dot Menu State
+                                BrowserMenuState(
+                                    canGoBack = canGoBack,
+                                    canGoForward = canGoForward,
+                                    isDesktopMode = isDesktopMode,
+                                    onBack = {
+                                        dismissAllowingStateLoss()
+                                        selectedTab?.let { components.useCases.sessionUseCases.goBack(it.id) }
+                                    },
+                                    onForward = {
+                                        dismissAllowingStateLoss()
+                                        selectedTab?.let { components.useCases.sessionUseCases.goForward(it.id) }
+                                    },
+                                    onReload = {
+                                        dismissAllowingStateLoss()
+                                        selectedTab?.let { components.useCases.sessionUseCases.reload(it.id) }
+                                    },
+                                    onBookmark = {
+                                        dismissAllowingStateLoss()
+                                        // Toggle bookmark
+                                    },
+                                    onShare = {
+                                        dismissAllowingStateLoss()
+                                        val url = selectedTab?.content?.url
+                                        if (!url.isNullOrBlank() && url != "about:blank") {
+                                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_TEXT, url)
+                                            }
+                                            startActivity(Intent.createChooser(intent, "Share"))
+                                        }
+                                    },
+                                    onTranslate = { dismissAllowingStateLoss() },
+                                    onToggleDesktop = {
+                                        dismissAllowingStateLoss()
+                                        selectedTab?.let {
+                                            components.useCases.sessionUseCases.requestDesktopSite(!isDesktopMode, it.id)
+                                        }
+                                    },
+                                    onFindInPage = { dismissAllowingStateLoss() },
+                                    onAddToHome = { dismissAllowingStateLoss() },
+                                    onCaptureTools = {
+                                        dismissAllowingStateLoss()
+                                        context.startActivity(Intent(context, ToolsActivity::class.java))
+                                    },
+                                    onDownloads = { navigateSafe(R.id.downloadsFragment) },
+                                    onHistory = { navigateSafe(R.id.historyFragment) },
+                                    onSettings = {
+                                        dismissAllowingStateLoss()
+                                        context.startActivity(Intent(context, SettingsActivity::class.java))
+                                    }
                                 )
                             }
 
-                            MenuRowItem(R.drawable.fx_ic_settings_24, "Settings") {
-                                val ctx = context
-                                dismissAllowingStateLoss()
-                                ctx.startActivity(Intent(ctx, SettingsActivity::class.java))
-                            }
+                            Spacer(modifier = Modifier.height(10.dp))
                         }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(32.dp))
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            BottomBarItem("Home", R.drawable.ic_home) {
-                                val act = activity
-                                dismissAllowingStateLoss()
-                                val navHostFragment = act?.supportFragmentManager?.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
-                                val controller = navHostFragment?.navController
-                                if (controller == null) {
-                                    UHLog.w("ui_warn", "Home clicked but NavController is unavailable.")
-                                } else if (!controller.popBackStack(R.id.homeFragment, false)) {
-                                    try {
-                                        controller.navigate(R.id.homeFragment)
-                                    } catch (e: Exception) {
-                                        UHLog.throwable("ui_error", "Failed navigating to homeFragment", e)
-                                    }
-                                }
-                            }
-                            BottomBarItem("Add", R.drawable.ic_heart_plus) { dismissAllowingStateLoss() }
-                            BottomBarItem("Quit", R.drawable.ic_power) {
-                                val act = activity
-                                dismissAllowingStateLoss()
-                                act?.finish()
-                            }
-                            BottomBarItem("Scripts", R.drawable.fx_ic_scripts_24) {
-                                val ctx = context
-                                dismissAllowingStateLoss()
-                                ctx.startActivity(Intent(ctx, ScriptsActivity::class.java))
-                            }
-                            BottomBarItem("Reload", R.drawable.ic_reload) {
-                                dismissAllowingStateLoss()
-                                val tab = selectedTab ?: components.store.state.selectedTab
-                                if (tab != null) {
-                                    components.useCases.sessionUseCases.reload(tab.id)
-                                } else {
-                                    UHLog.w("ui_warn", "Reload clicked in MainMenu with no active tab.")
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
             }
@@ -228,22 +220,237 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
     }
 
     @Composable
-    private fun TopRowItem(label: String, iconRes: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    private fun HomeMenuState(
+        onHistory: () -> Unit,
+        onDownloads: () -> Unit,
+        onCaptureTools: () -> Unit,
+        onSettings: () -> Unit,
+        onCustomizeHome: () -> Unit,
+        onScripts: () -> Unit,
+        onQuit: () -> Unit
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Quick Action Grid
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                QuickActionItem(
+                    label = "History",
+                    iconRes = R.drawable.ic_history,
+                    modifier = Modifier.weight(1f),
+                    onClick = onHistory
+                )
+                QuickActionItem(
+                    label = "Downloads",
+                    iconRes = R.drawable.fx_ic_downloads_24,
+                    modifier = Modifier.weight(1f),
+                    onClick = onDownloads
+                )
+                QuickActionItem(
+                    label = "Capture",
+                    iconRes = R.drawable.ic_tools,
+                    modifier = Modifier.weight(1f),
+                    onClick = onCaptureTools
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Menu Items List Card
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    CompactMenuItem(
+                        iconRes = R.drawable.fx_ic_appearance_24,
+                        label = "Customize Home",
+                        onClick = onCustomizeHome
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.fx_ic_scripts_24,
+                        label = "User Scripts",
+                        onClick = onScripts
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.fx_ic_settings_24,
+                        label = "Settings",
+                        onClick = onSettings
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.ic_power,
+                        label = "Quit",
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = onQuit
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun BrowserMenuState(
+        canGoBack: Boolean,
+        canGoForward: Boolean,
+        isDesktopMode: Boolean,
+        onBack: () -> Unit,
+        onForward: () -> Unit,
+        onReload: () -> Unit,
+        onBookmark: () -> Unit,
+        onShare: () -> Unit,
+        onTranslate: () -> Unit,
+        onToggleDesktop: () -> Unit,
+        onFindInPage: () -> Unit,
+        onAddToHome: () -> Unit,
+        onCaptureTools: () -> Unit,
+        onDownloads: () -> Unit,
+        onHistory: () -> Unit,
+        onSettings: () -> Unit
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Browser Top Quick Navigation Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack, enabled = canGoBack) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.uh_ic_back_24),
+                        contentDescription = "Back",
+                        tint = if (canGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(onClick = onForward, enabled = canGoForward) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.uh_ic_forward_24),
+                        contentDescription = "Forward",
+                        tint = if (canGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(onClick = onReload) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.uh_ic_reload_24),
+                        contentDescription = "Reload",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(onClick = onBookmark) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.uh_ic_bookmark_24),
+                        contentDescription = "Bookmark",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(onClick = onShare) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.uh_ic_share_24),
+                        contentDescription = "Share",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Body Menu Items
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    CompactMenuItem(
+                        iconRes = R.drawable.uh_ic_translate_24,
+                        label = "Translate",
+                        onClick = onTranslate
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.uh_ic_device_desktop_24,
+                        label = if (isDesktopMode) "Request Mobile Site" else "Request Desktop Site",
+                        onClick = onToggleDesktop
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.fx_ic_search_24,
+                        label = "Find in Page",
+                        onClick = onFindInPage
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.uh_ic_plus_24,
+                        label = "Add to Home Screen",
+                        onClick = onAddToHome
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.ic_tools,
+                        label = "Session Capture Tools",
+                        onClick = onCaptureTools
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                    )
+
+                    CompactMenuItem(
+                        iconRes = R.drawable.fx_ic_downloads_24,
+                        label = "Downloads",
+                        onClick = onDownloads
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.ic_history,
+                        label = "History",
+                        onClick = onHistory
+                    )
+                    CompactMenuItem(
+                        iconRes = R.drawable.fx_ic_settings_24,
+                        label = "Settings",
+                        onClick = onSettings
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun QuickActionItem(
+        label: String,
+        iconRes: Int,
+        modifier: Modifier = Modifier,
+        onClick: () -> Unit
+    ) {
         Column(
             modifier = modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable { onClick() }
-                .padding(vertical = 16.dp),
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onClick() }
+                .padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = label,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(22.dp)
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = label,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -254,45 +461,35 @@ class MainMenuDialogFragment : BottomSheetDialogFragment() {
     }
 
     @Composable
-    private fun MenuRowItem(iconRes: Int, label: String, onClick: () -> Unit) {
+    private fun CompactMenuItem(
+        iconRes: Int,
+        label: String,
+        tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant,
+        onClick: () -> Unit
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onClick() }
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onClick() }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = label,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
+                tint = tint,
+                modifier = Modifier.size(20.dp)
             )
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(14.dp))
             Text(
                 text = label,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 16.sp,
+                color = if (tint == MaterialTheme.colorScheme.error) tint else MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
                 modifier = Modifier.weight(1f)
-            )
-        }
-    }
-
-    @Composable
-    private fun BottomBarItem(label: String, iconRes: Int, onClick: () -> Unit) {
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                painter = painterResource(id = iconRes),
-                contentDescription = label,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
             )
         }
     }

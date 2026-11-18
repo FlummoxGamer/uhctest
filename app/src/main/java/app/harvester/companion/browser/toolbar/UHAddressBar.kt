@@ -3,6 +3,7 @@ package app.harvester.companion.browser.toolbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -282,7 +283,10 @@ fun UHAddressBar(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(start = 4.dp)
-                                .clickable { onEditStart() }
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onEditStart() }
                         )
                     }
                 }
@@ -292,7 +296,10 @@ fun UHAddressBar(
                         .padding(horizontal = 4.dp)
                         .size(24.dp)
                         .border(2.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(8.dp))
-                        .clickable { onTabCountClick() },
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onTabCountClick() },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(

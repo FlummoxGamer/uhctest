@@ -100,24 +100,27 @@ class HomeActivity : AppCompatActivity() {
                 val controller = navControllerState
                 if (browserViewModel.isEditing.value) {
                     browserViewModel.exitEditMode()
-                } else if (controller != null && controller.currentDestination?.id == R.id.browserFragment) {
-                    try {
-                        val currentFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)?.childFragmentManager?.primaryNavigationFragment
-                        if (currentFragment is BrowserFragment) {
-                            if (!currentFragment.onBackPressed()) {
-                                controller.popBackStack()
-                            }
-                        } else {
-                            controller.popBackStack()
-                        }
-                    } catch (e: Exception) {
-                        UHLog.throwable("ui_error", "Failed handling back press in BrowserFragment", e)
-                    }
-                } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
-                    isEnabled = true
+                    return
                 }
+                val navHost = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)
+                val activeBrowser = navHost?.childFragmentManager?.fragments?.firstOrNull { it is BrowserFragment && it.isVisible } as? BrowserFragment
+                if (activeBrowser != null) {
+                    if (activeBrowser.onBackPressed()) {
+                        return
+                    }
+                    if (controller != null && controller.currentDestination?.id == R.id.browserFragment) {
+                        controller.popBackStack()
+                        return
+                    }
+                }
+                if (controller != null && controller.currentDestination?.id != R.id.homeFragment) {
+                    if (controller.popBackStack()) {
+                        return
+                    }
+                }
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
             }
         })
     }

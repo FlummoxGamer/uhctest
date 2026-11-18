@@ -71,7 +71,9 @@ fun UHTheme(
         SideEffect {
             val window = (view.context as? Activity)?.window
             if (window != null) {
-                window.decorView.setBackgroundColor(bgArgb)
+                if (lightStatusBarOverride == null && lightNavigationBarOverride == null) {
+                    window.decorView.setBackgroundColor(bgArgb)
+                }
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.isAppearanceLightStatusBars = useLightStatus
                 controller.isAppearanceLightNavigationBars = useLightNav

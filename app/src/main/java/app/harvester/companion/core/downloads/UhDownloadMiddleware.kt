@@ -56,7 +56,7 @@ class UhDownloadMiddleware(
             is DownloadAction.UpdateDownloadAction -> {
                 val updated = if (
                     action.download.status == DownloadState.Status.FAILED &&
-                    (!isNetworkAvailableProvider() || isWaitingForNetworkProvider(action.download.id))
+                    (!isNetworkAvailableProvider() || isWaitingForNetworkProvider(action.download.id) || action.download.currentBytesCopied > 0L)
                 ) {
                     onMarkedWaitingForNetwork(action.download.id)
                     action.download.copy(status = DownloadState.Status.PAUSED)
