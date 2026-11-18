@@ -172,7 +172,7 @@ class SettingsActivity : AppCompatActivity() {
                                 onClick = {
                                     Toast.makeText(
                                         context,
-                                        "Harvester ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                                        "UH ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                                         Toast.LENGTH_LONG
                                     ).show()
                                 }

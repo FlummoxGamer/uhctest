@@ -166,6 +166,30 @@ object SearchEnginePrefs {
         return true
     }
 
+    fun updateCustom(ctx: Context, id: String, name: String, url: String): Boolean {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false
+        val host = try { java.net.URI(trimmed).host ?: return false } catch (_: Exception) { return false }
+        if (host.isBlank() || !host.contains(".")) return false
+
+        val searchUrl = if (trimmed.contains("%s")) {
+            trimmed
+        } else {
+            val base = trimmed.trimEnd('/')
+            if (base.contains("?")) "$base&q=%s" else "$base?q=%s"
+        }
+
+        val finalName = name.trim().ifBlank { shortNameFromHost(host) }
+        val updated = listCustom(ctx).map { entry ->
+            if (entry.id == id) {
+                Entry(id, finalName, host, searchUrl, null, null, ddgIcon(host), true)
+            } else entry
+        }
+        saveCustom(ctx, updated)
+        _activeEngineFlow.value = currentEntry(ctx)
+        return true
+    }
+
     fun deleteCustom(ctx: Context, id: String) {
         val remaining = listCustom(ctx).filter { it.id != id }
         saveCustom(ctx, remaining)

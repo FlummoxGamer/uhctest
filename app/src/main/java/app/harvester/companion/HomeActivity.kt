@@ -95,11 +95,22 @@ class HomeActivity : AppCompatActivity() {
             }
         }
 
+        android.os.Looper.myQueue().addIdleHandler {
+            try {
+                (application as? UHApp)?.components?.engine
+            } catch (_: Exception) {}
+            false
+        }
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val controller = navControllerState
                 if (browserViewModel.isEditing.value) {
                     browserViewModel.exitEditMode()
+                    return
+                }
+                if (browserViewModel.showFindInPage.value) {
+                    browserViewModel.closeFindInPage()
                     return
                 }
                 val navHost = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)

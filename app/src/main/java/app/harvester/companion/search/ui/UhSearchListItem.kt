@@ -159,7 +159,7 @@ fun UhSearchListItem(
             ) {
                 val iconRes = when (item.type) {
                     SuggestionType.SEARCH -> R.drawable.fx_ic_search_24
-                    SuggestionType.TRENDING -> R.drawable.fx_ic_search_24
+                    SuggestionType.TRENDING -> R.drawable.uh_ic_trending_24
                     SuggestionType.HISTORY -> R.drawable.ic_history
                 }
                 Icon(

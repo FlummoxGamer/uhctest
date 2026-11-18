@@ -227,7 +227,8 @@ class BrowserFragment : Fragment() {
                     WindowInsetsCompat.Type.navigationBars()
             )
             val density = v.resources.displayMetrics.density
-            val toolbarClearancePx = (72f * density).toInt()
+            val isLandscape = v.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            val toolbarClearancePx = ((if (isLandscape) 52f else 62f) * density).toInt()
             val isBottom = viewModel.isBarBottom.value
             val topPadding = bars.top + if (!isBottom) toolbarClearancePx else 0
             val bottomPadding = bars.bottom + if (isBottom) toolbarClearancePx else 0
@@ -238,6 +239,18 @@ class BrowserFragment : Fragment() {
 
         val backCallback = object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (viewModel.isEditing.value) {
+                    viewModel.exitEditMode()
+                    return
+                }
+                if (viewModel.showFindInPage.value) {
+                    viewModel.closeFindInPage(components.store.state.selectedTabId)
+                    return
+                }
+                if (viewModel.showZoomBar.value) {
+                    viewModel.closeZoomBar()
+                    return
+                }
                 if (onBackPressed()) {
                     return
                 }
@@ -349,11 +362,10 @@ class BrowserFragment : Fragment() {
             view = binding.root
         )
 
-        val sitePermissionsStorage = mozilla.components.feature.sitepermissions.OnDiskSitePermissionsStorage(requireContext())
         sitePermissionsFeature.set(
             feature = SitePermissionsFeature(
                 context = requireContext(),
-                storage = sitePermissionsStorage,
+                storage = components.geckoSitePermissionsStorage,
                 sessionId = null,
                 fragmentManager = parentFragmentManager,
                 onNeedToRequestPermissions = { requestPermissions(it, 2) },
@@ -383,6 +395,7 @@ class BrowserFragment : Fragment() {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 components.store.stateFlow.collect { state ->
                     val content = state.selectedTab?.content ?: return@collect
+                    viewModel.refreshBookmarkState(content.url)
                     if (content.url.isBlank() && content.loading) {
                         UHLog.w("web_warn", "Selected tab is loading a blank URL.")
                     }

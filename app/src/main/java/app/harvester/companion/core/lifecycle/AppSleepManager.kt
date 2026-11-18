@@ -7,7 +7,10 @@ import android.content.res.Configuration
 import android.os.Bundle
 import app.harvester.companion.SessionRecorder
 import app.harvester.companion.SessionService
+import app.harvester.companion.SettingsPrefs
 import app.harvester.companion.UHLog
+import app.harvester.companion.browser.tabs.TabGroupStore
+import app.harvester.companion.browser.tabs.TabPreviewCache
 import app.harvester.companion.components.Components
 import coil.Coil
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import mozilla.components.browser.engine.gecko.GeckoEngineSession
 import mozilla.components.browser.session.storage.SessionStorage
@@ -26,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallbacks2 {
 
-    private const val SLEEP_DELAY_MS = 90_000L
+    private const val DEFAULT_SLEEP_DELAY_SEC = 90
     private const val AUTOSAVE_INTERVAL_MS = 30_000L
 
     private val initialized = AtomicBoolean(false)
@@ -50,6 +54,8 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
         app = application
         components = appComponents
         sessionStorage = SessionStorage(application, appComponents.engine)
+        TabPreviewCache.init(application)
+        TabGroupStore.init(application)
         application.registerActivityLifecycleCallbacks(this)
         application.registerComponentCallbacks(this)
         restoreIfNeeded()
@@ -64,18 +70,30 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
                 if (components.store.state.tabs.isEmpty()) {
                     val recovered = sessionStorage.restore()
                     if (recovered != null && recovered.tabs.isNotEmpty()) {
-                        withContext(Dispatchers.Main) {
-                            if (components.store.state.tabs.isEmpty()) {
-                                components.store.dispatch(
-                                    TabListAction.RestoreAction(
-                                        tabs = recovered.tabs,
-                                        selectedTabId = recovered.selectedTabId,
-                                        restoreLocation = TabListAction.RestoreAction.RestoreLocation.BEGINNING,
-                                        tabPartitions = emptyMap(),
+                        // Never restore stale Private tabs on launch; keep only Normal tabs lazily
+                        val normalTabs = recovered.tabs.filter { !it.state.private }
+                        if (normalTabs.isNotEmpty()) {
+                            val validIds = normalTabs.map { it.state.id }.toSet()
+                            val selectedId = recovered.selectedTabId?.takeIf { it in validIds }
+                                ?: normalTabs.lastOrNull()?.state?.id
+                            withContext(Dispatchers.Main) {
+                                if (components.store.state.tabs.isEmpty()) {
+                                    components.store.dispatch(
+                                        TabListAction.RestoreAction(
+                                            tabs = normalTabs,
+                                            selectedTabId = selectedId,
+                                            restoreLocation = TabListAction.RestoreAction.RestoreLocation.BEGINNING,
+                                            tabPartitions = emptyMap(),
+                                        )
                                     )
-                                )
-                                UHLog.d("lifecycle", "Restored ${recovered.tabs.size} tab(s) from SessionStorage.")
+                                    TabGroupStore.cleanupOrphanedTabs(validIds)
+                                    TabPreviewCache.pruneToValidIds(validIds)
+                                    UHLog.d("lifecycle", "Lazy-restored ${normalTabs.size} normal tab(s) from SessionStorage.")
+                                }
                             }
+                        } else {
+                            TabGroupStore.cleanupOrphanedTabs(emptySet())
+                            TabPreviewCache.clear()
                         }
                     }
                 }
@@ -90,8 +108,8 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
         autoSaveJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(AUTOSAVE_INTERVAL_MS)
-                if (!isSleeping && components.store.state.tabs.isNotEmpty()) {
-                    saveSnapshotNow(flushEngine = false)
+                if (!isSleeping && components.store.state.tabs.any { !it.content.private }) {
+                    saveNormalSnapshot(flushEngine = false)
                 }
             }
         }
@@ -100,22 +118,76 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
     fun persistNow() {
         if (!initialized.get()) return
         scope.launch(Dispatchers.IO) {
-            saveSnapshotNow(flushEngine = true)
+            saveNormalSnapshot(flushEngine = true)
         }
     }
 
-    private suspend fun saveSnapshotNow(flushEngine: Boolean) {
+    fun onTaskRemoved() {
+        if (!initialized.get()) return
         try {
-            val state = components.store.state
-            if (flushEngine && state.tabs.isNotEmpty()) {
-                withContext(Dispatchers.Main) {
-                    state.tabs.forEach { tab ->
+            runBlocking(Dispatchers.Main) {
+                val state = components.store.state
+                val hasPrivate = state.tabs.any { it.content.private }
+                if (hasPrivate) {
+                    components.store.dispatch(TabListAction.RemoveAllPrivateTabsAction)
+                    try {
+                        components.runtime.storageController.clearDataForSessionContext("private")
+                    } catch (_: Exception) {}
+                }
+                val normalTabs = components.store.state.tabs.filter { !it.content.private }
+                normalTabs.forEach { tab ->
+                    setGeckoSessionActive(tab.engineState.engineSession, false)
+                    if (tab.engineState.engineSession != null) {
                         components.store.dispatch(EngineAction.FlushEngineSessionStateAction(tab.id))
                     }
                 }
-                delay(250L)
+                TabGroupStore.cleanupOrphanedTabs(normalTabs.map { it.id }.toSet())
+                TabPreviewCache.pruneToValidIds(normalTabs.map { it.id }.toSet())
             }
-            sessionStorage.save(components.store.state)
+            Thread.sleep(150L)
+            val normalState = components.store.state.copy(
+                tabs = components.store.state.tabs.filter { !it.content.private }
+            )
+            sessionStorage.save(normalState)
+            runBlocking(Dispatchers.Main) {
+                components.store.state.tabs.forEach { tab ->
+                    if (tab.engineState.engineSession != null) {
+                        components.store.dispatch(EngineAction.SuspendEngineSessionAction(tab.id))
+                    }
+                }
+                TabPreviewCache.trimMemory()
+                try {
+                    Coil.imageLoader(app).memoryCache?.clear()
+                } catch (_: Exception) {}
+            }
+            UHLog.d("lifecycle", "onTaskRemoved: wiped Private data, saved Normal tabs & freed RAM.")
+        } catch (e: Exception) {
+            UHLog.w("lifecycle_warn", "onTaskRemoved cleanup issue: ${e.message}")
+        }
+    }
+
+    private suspend fun saveNormalSnapshot(flushEngine: Boolean) {
+        try {
+            val state = components.store.state
+            val normalTabs = state.tabs.filter { !it.content.private }
+            if (flushEngine && normalTabs.isNotEmpty()) {
+                withContext(Dispatchers.Main) {
+                    normalTabs.forEach { tab ->
+                        if (tab.engineState.engineSession != null) {
+                            components.store.dispatch(EngineAction.FlushEngineSessionStateAction(tab.id))
+                        }
+                    }
+                }
+                delay(200L)
+            }
+            val normalOnlyState = components.store.state.copy(
+                tabs = components.store.state.tabs.filter { !it.content.private },
+                selectedTabId = components.store.state.selectedTabId?.takeIf { sid ->
+                    components.store.state.tabs.any { it.id == sid && !it.content.private }
+                } ?: components.store.state.tabs.lastOrNull { !it.content.private }?.id
+            )
+            sessionStorage.save(normalOnlyState)
+            TabGroupStore.cleanupOrphanedTabs(normalTabs.map { it.id }.toSet())
         } catch (e: Exception) {
             UHLog.w("lifecycle_warn", "Session snapshot save skipped: ${e.message}")
         }
@@ -136,7 +208,7 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
         isSleeping = true
         UHLog.d("lifecycle", "Entering low-power sleep mode for background session retention.")
         scope.launch {
-            saveSnapshotNow(flushEngine = true)
+            saveNormalSnapshot(flushEngine = true)
             withContext(Dispatchers.Main) {
                 val state = components.store.state
                 val selectedId = state.selectedTabId
@@ -150,7 +222,6 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
                     Coil.imageLoader(app).memoryCache?.clear()
                 } catch (_: Exception) {}
             }
-            SessionService.startOrUpdate(app, isSleeping = true, hasTabs = components.store.state.tabs.isNotEmpty())
         }
     }
 
@@ -186,12 +257,15 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
             val hasTabs = components.store.state.tabs.isNotEmpty()
             SessionService.startOrUpdate(app, isSleeping = false, hasTabs = hasTabs)
             scope.launch(Dispatchers.IO) {
-                saveSnapshotNow(flushEngine = true)
+                saveNormalSnapshot(flushEngine = true)
             }
+            val sleepSec = SettingsPrefs.getInt(app, SettingsPrefs.K_TAB_SLEEP_SECONDS, DEFAULT_SLEEP_DELAY_SEC)
             sleepJob?.cancel()
-            sleepJob = scope.launch {
-                delay(SLEEP_DELAY_MS)
-                enterSleepMode()
+            if (sleepSec > 0) {
+                sleepJob = scope.launch {
+                    delay(sleepSec * 1000L)
+                    enterSleepMode()
+                }
             }
         }
     }
@@ -205,6 +279,7 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
             ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> {
                 try {
                     Coil.imageLoader(app).memoryCache?.clear()
+                    TabPreviewCache.trimMemory()
                 } catch (_: Exception) {}
                 if (startedActivities == 0) {
                     sleepJob?.cancel()
@@ -222,7 +297,7 @@ object AppSleepManager : Application.ActivityLifecycleCallbacks, ComponentCallba
             ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> {
                 if (startedActivities == 0) {
                     scope.launch(Dispatchers.IO) {
-                        saveSnapshotNow(flushEngine = true)
+                        saveNormalSnapshot(flushEngine = true)
                     }
                 }
             }

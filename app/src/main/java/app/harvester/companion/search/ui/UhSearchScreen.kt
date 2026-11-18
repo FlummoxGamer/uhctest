@@ -1,5 +1,6 @@
 package app.harvester.companion.search.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -18,7 +19,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -45,6 +45,11 @@ fun UhSearchScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    // Guarantee single-back dismissal of search overlay regardless of background tab history
+    BackHandler(enabled = true) {
+        onDismiss()
+    }
+
     UHTheme {
         Column(
             modifier = Modifier
@@ -58,19 +63,11 @@ fun UhSearchScreen(
                 addressBarContent()
 
                 state.currentTab?.let { currentTab ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column {
-                            UhSearchListItem(
-                                item = currentTab,
-                                onSubmit = onSubmit,
-                                onEditUrl = onFillUrl
-                            )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-                        }
-                    }
+                    UhSearchListItem(
+                        item = currentTab,
+                        onSubmit = onSubmit,
+                        onEditUrl = onFillUrl
+                    )
                 }
 
                 SearchResultsColumn(
@@ -90,19 +87,11 @@ fun UhSearchScreen(
                 )
 
                 state.currentTab?.let { currentTab ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-                            UhSearchListItem(
-                                item = currentTab,
-                                onSubmit = onSubmit,
-                                onEditUrl = onFillUrl
-                            )
-                        }
-                    }
+                    UhSearchListItem(
+                        item = currentTab,
+                        onSubmit = onSubmit,
+                        onEditUrl = onFillUrl
+                    )
                 }
 
                 addressBarContent()

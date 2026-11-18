@@ -175,6 +175,8 @@ class Components(val context: Context) {
         val browserStore = BrowserStore(
             middleware = middlewareList + EngineMiddleware.create(engine, trimMemoryAutomatically = false)
         )
+        app.harvester.companion.GeckoWebExtensionBridge.init(context.applicationContext, runtime, this)
+        app.harvester.companion.settings.addons.UBlockOriginManager.init(context.applicationContext, runtime)
         registerNetworkResumeCallback(browserStore)
         browserStore
     }

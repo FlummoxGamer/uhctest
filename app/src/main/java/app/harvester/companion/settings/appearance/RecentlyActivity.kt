@@ -1,6 +1,7 @@
 package app.harvester.companion.settings.appearance
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.compose.setContent
@@ -21,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -44,12 +46,14 @@ class RecentlyActivity : AppCompatActivity() {
         setContent {
             UHTheme {
                 val context = LocalContext.current
+                val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+                val columns = if (isLandscape) 6 else 4
                 val tick = reloadTick
                 val wallpaperState by WallpaperStore.wallpaperFlow(context).collectAsState()
                 val activePath = wallpaperState.path ?: "default"
                 val recentTiles = remember(tick, activePath) {
                     WallpaperStore.getRecent(context).map { path ->
-                        if (path.endsWith(".mp4")) HomeWallpaperTile.Motion(path)
+                        if (WallpaperStore.isVideoFileOrUrl(path)) HomeWallpaperTile.Motion(path)
                         else HomeWallpaperTile.Custom(path)
                     }
                 }
@@ -84,6 +88,7 @@ class RecentlyActivity : AppCompatActivity() {
                         Spacer(modifier = Modifier.height(8.dp))
                         WallpaperTileGrid(
                             tiles = recentTiles,
+                            columns = columns,
                             activePath = activePath,
                             onTileClick = { tile ->
                                 val path = when (tile) {
@@ -106,7 +111,7 @@ class RecentlyActivity : AppCompatActivity() {
                                     Intent(context, WallpaperPreviewActivity::class.java).apply {
                                         putExtra("imagePath", path)
                                         putExtra("isCustom", true)
-                                        putExtra("isVideo", path.endsWith(".mp4"))
+                                        putExtra("isVideo", WallpaperStore.isVideoFileOrUrl(path))
                                     }
                                 )
                             },

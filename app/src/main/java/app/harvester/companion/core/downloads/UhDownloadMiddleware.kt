@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import app.harvester.companion.data.downloads.UhDownloadStorage
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,12 +17,10 @@ import mozilla.components.browser.state.selector.findTabOrCustomTab
 import mozilla.components.browser.state.selector.getNormalOrPrivateTabs
 import mozilla.components.browser.state.state.BrowserState
 import mozilla.components.browser.state.state.content.DownloadState
-import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.feature.downloads.AbstractFetchDownloadService.Companion.ACTION_REMOVE_PRIVATE_DOWNLOAD
 import mozilla.components.lib.state.Middleware
 import mozilla.components.lib.state.Store
 import mozilla.components.support.utils.DownloadFileUtils
-import app.harvester.companion.data.downloads.UhDownloadStorage
 
 class UhDownloadMiddleware(
     private val applicationContext: Context,
@@ -54,17 +53,22 @@ class UhDownloadMiddleware(
             }
             is DownloadAction.RemoveAllDownloadsAction -> removeDownloads()
             is DownloadAction.UpdateDownloadAction -> {
+                val dl = action.download
                 val updated = if (
-                    action.download.status == DownloadState.Status.FAILED &&
-                    (!isNetworkAvailableProvider() || isWaitingForNetworkProvider(action.download.id) || action.download.currentBytesCopied > 0L)
+                    dl.status == DownloadState.Status.FAILED &&
+                    (!isNetworkAvailableProvider() || isWaitingForNetworkProvider(dl.id))
                 ) {
-                    onMarkedWaitingForNetwork(action.download.id)
-                    action.download.copy(status = DownloadState.Status.PAUSED)
+                    onMarkedWaitingForNetwork(dl.id)
+                    dl.copy(status = DownloadState.Status.PAUSED)
                 } else {
-                    if (action.download.status == DownloadState.Status.COMPLETED || action.download.status == DownloadState.Status.CANCELLED) {
-                        onClearedWaitingForNetwork(action.download.id)
+                    if (
+                        dl.status == DownloadState.Status.COMPLETED ||
+                        dl.status == DownloadState.Status.CANCELLED ||
+                        (dl.status == DownloadState.Status.DOWNLOADING && isNetworkAvailableProvider())
+                    ) {
+                        onClearedWaitingForNetwork(dl.id)
                     }
-                    action.download
+                    dl
                 }
                 effectiveAction = DownloadAction.UpdateDownloadAction(updated)
                 updateDownload(updated, store)
@@ -168,8 +172,13 @@ class UhDownloadMiddleware(
                 downloadStorage.remove(download)
             } else if (!store.state.downloads.containsKey(download.id) && !download.private) {
                 val restored = if (download.status == DownloadState.Status.DOWNLOADING) {
+                    if (!isNetworkAvailableProvider()) {
+                        onMarkedWaitingForNetwork(download.id)
+                    }
                     download.copy(status = DownloadState.Status.PAUSED)
-                } else download
+                } else {
+                    download
+                }
                 store.dispatch(DownloadAction.RestoreDownloadStateAction(restored))
             }
         }

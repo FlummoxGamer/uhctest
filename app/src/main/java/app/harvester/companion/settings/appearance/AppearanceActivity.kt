@@ -14,12 +14,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -50,6 +57,53 @@ class AppearanceActivity : AppCompatActivity() {
             UHTheme {
                 val context = LocalContext.current
                 val themeMode by ThemePrefs.modeFlow(context).collectAsState()
+                var showSleepPicker by remember { mutableStateOf(false) }
+                var sleepSeconds by remember {
+                    mutableIntStateOf(SettingsPrefs.getInt(context, SettingsPrefs.K_TAB_SLEEP_SECONDS, 120))
+                }
+
+                if (showSleepPicker) {
+                    val options = listOf(0 to "Never", 30 to "30 seconds", 120 to "2 minutes", 300 to "5 minutes")
+                    AlertDialog(
+                        onDismissRequest = { showSleepPicker = false },
+                        title = { Text("Auto-sleep inactive tabs", color = MaterialTheme.colorScheme.onSurface) },
+                        text = {
+                            Column {
+                                options.forEach { (sec, label) ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                sleepSeconds = sec
+                                                SettingsPrefs.setInt(context, SettingsPrefs.K_TAB_SLEEP_SECONDS, sec)
+                                                showSleepPicker = false
+                                            }
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = sleepSeconds == sec,
+                                            onClick = {
+                                                sleepSeconds = sec
+                                                SettingsPrefs.setInt(context, SettingsPrefs.K_TAB_SLEEP_SECONDS, sec)
+                                                showSleepPicker = false
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showSleepPicker = false }) {
+                                Text("Close")
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                }
 
                 UhSettingsScaffold(
                     title = "Appearance",
@@ -108,35 +162,40 @@ class AppearanceActivity : AppCompatActivity() {
                                 context.startActivity(Intent(context, CustomizeAddressBarActivity::class.java))
                             }
                         )
-                        UhSettingsDivider()
+                    }
+
+                    SettingsCategory("Tabs")
+                    UhSettingsCardGroup {
+                        val sleepLabel = when (sleepSeconds) {
+                            0 -> "Never"
+                            30 -> "30 seconds"
+                            120 -> "2 minutes"
+                            300 -> "5 minutes"
+                            else -> "${sleepSeconds}s"
+                        }
                         SettingsRow(
-                            title = "Menu Layout",
-                            iconRes = R.drawable.fx_ic_more_24,
+                            title = "Auto-sleep background tabs",
+                            subtitle = "Suspend inactive tabs to save memory ($sleepLabel)",
+                            iconRes = R.drawable.uh_ic_tab_modern_24,
                             showChevron = true,
                             insideCard = true,
-                            onClick = {
-                                Toast.makeText(context, "Coming soon", Toast.LENGTH_SHORT).show()
-                            }
+                            onClick = { showSleepPicker = true }
                         )
                         UhSettingsDivider()
-                        SettingsRow(
-                            title = "Tab Bar Style",
-                            iconRes = R.drawable.fx_ic_storage_24,
-                            showChevron = true,
-                            insideCard = true,
-                            onClick = {
-                                Toast.makeText(context, "Coming soon", Toast.LENGTH_SHORT).show()
-                            }
+                        SettingsSwitchRow(
+                            title = "Confirm swipe-to-close",
+                            subtitle = "Ask before closing tabs by swiping",
+                            key = SettingsPrefs.K_TAB_CONFIRM_SWIPE,
+                            default = false,
+                            insideCard = true
                         )
                         UhSettingsDivider()
-                        SettingsRow(
-                            title = "App Language",
-                            iconRes = R.drawable.fx_ic_info_24,
-                            showChevron = true,
-                            insideCard = true,
-                            onClick = {
-                                Toast.makeText(context, "Coming soon", Toast.LENGTH_SHORT).show()
-                            }
+                        SettingsSwitchRow(
+                            title = "Auto-collapse inactive groups",
+                            subtitle = "Collapse tab groups when opening Tabs tray",
+                            key = SettingsPrefs.K_TAB_AUTO_COLLAPSE_GROUPS,
+                            default = false,
+                            insideCard = true
                         )
                     }
 

@@ -2,11 +2,15 @@ package app.harvester.companion.core.downloads
 
 import android.app.DownloadManager
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import app.harvester.companion.R
 import app.harvester.companion.UHApp
 import app.harvester.companion.UHLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import mozilla.components.browser.state.action.DownloadAction
@@ -22,9 +26,9 @@ import mozilla.components.feature.downloads.FileSizeFormatter
 import mozilla.components.feature.downloads.PackageNameProvider
 import mozilla.components.feature.downloads.filewriter.DownloadFileWriter
 import mozilla.components.support.base.android.NotificationsDelegate
+import mozilla.components.support.utils.DefaultDateTimeProvider
 import mozilla.components.support.utils.DefaultDownloadFileUtils
 import mozilla.components.support.utils.DownloadFileUtils
-import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 class UhDownloadService : AbstractFetchDownloadService() {
@@ -50,7 +54,9 @@ class UhDownloadService : AbstractFetchDownloadService() {
     }
 
     private val resumeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val knownActiveJobIds: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
+    private val activeRangeJobs = ConcurrentHashMap<String, Job>()
+    private val uhFormatter by lazy { UhDefaultFileSizeFormatter(applicationContext) }
+    private val uhEstimator by lazy { UhDownloadEstimator(DefaultDateTimeProvider()) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val downloadId = intent?.getStringExtra("downloadId")
@@ -59,35 +65,111 @@ class UhDownloadService : AbstractFetchDownloadService() {
 
         val action = intent?.action
         if (!downloadId.isNullOrBlank()) {
-            // Ensure AbstractFetchDownloadService always sees DownloadManager.EXTRA_DOWNLOAD_ID
             intent?.putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, downloadId)
             val download = store.state.downloads[downloadId]
 
-            if ((action == ACTION_RESUME || action == ACTION_TRY_AGAIN) && download != null) {
-                if (knownActiveJobIds.contains(downloadId)) {
-                    // Forward to AbstractFetchDownloadService broadcastReceiver which resumes from offset in memory
-                    val broadcast = Intent(ACTION_RESUME).apply {
-                        setPackage(packageName)
-                        putExtra("downloadId", downloadId)
-                        putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, downloadId)
-                        putExtra("INTENT_EXTRA_DOWNLOAD_ID", downloadId)
+            when (action) {
+                ACTION_PAUSE -> {
+                    activeRangeJobs.remove(downloadId)?.cancel()
+                    if (download != null) {
+                        val pausedState = download.copy(status = DownloadState.Status.PAUSED)
+                        store.dispatch(DownloadAction.UpdateDownloadAction(pausedState))
+                        postNotification(pausedState, isForeground = false)
                     }
-                    sendBroadcast(broadcast)
-                    return START_STICKY
-                } else if (download.currentBytesCopied > 0L) {
-                    // Cold-start Range resume preserving currentBytesCopied
-                    knownActiveJobIds.add(downloadId)
-                    resumeDownloadWithRange(downloadId)
-                    return START_STICKY
+                }
+                ACTION_CANCEL -> {
+                    activeRangeJobs.remove(downloadId)?.cancel()
+                }
+                ACTION_RESUME, ACTION_TRY_AGAIN -> {
+                    if (download != null) {
+                        if (activeRangeJobs[downloadId]?.isActive == true) {
+                            return START_STICKY
+                        }
+                        if (download.currentBytesCopied > 0L || action == ACTION_RESUME) {
+                            val ongoingPreview = download.copy(status = DownloadState.Status.DOWNLOADING)
+                            postNotification(ongoingPreview, isForeground = true)
+                            resumeDownloadWithRange(downloadId)
+                            return START_STICKY
+                        }
+                    }
                 }
             }
-            knownActiveJobIds.add(downloadId)
         }
         return super.onStartCommand(intent, flags, startId)
     }
 
+    private fun notificationIdFor(download: DownloadState): Int {
+        val id = download.notificationId ?: download.id.hashCode()
+        return if (id == 0 || id == UhDownloadNotification.NOTIFICATION_DOWNLOAD_GROUP_ID) {
+            (download.id.hashCode() and 0x7fffffff).coerceAtLeast(1000)
+        } else {
+            id
+        }
+    }
+
+    private fun postNotification(download: DownloadState, isForeground: Boolean) {
+        val notifId = notificationIdFor(download)
+        val notification = when (download.status) {
+            DownloadState.Status.DOWNLOADING, DownloadState.Status.INITIATED -> {
+                UhDownloadNotification.createOngoingDownloadNotification(
+                    context = applicationContext,
+                    downloadState = download,
+                    fileSizeFormatter = uhFormatter,
+                    notificationAccentColor = R.color.accent,
+                    downloadEstimator = uhEstimator,
+                )
+            }
+            DownloadState.Status.PAUSED -> {
+                UhDownloadNotification.createPausedDownloadNotification(
+                    context = applicationContext,
+                    downloadState = download,
+                    createdTime = download.createdTime,
+                    notificationAccentColor = R.color.accent,
+                )
+            }
+            DownloadState.Status.COMPLETED -> {
+                UhDownloadNotification.createDownloadCompletedNotification(
+                    context = applicationContext,
+                    downloadState = download,
+                    createdTime = download.createdTime,
+                    notificationAccentColor = R.color.accent,
+                    downloadFileUtils = downloadFileUtils,
+                    contentIntent = null,
+                )
+            }
+            DownloadState.Status.FAILED -> {
+                UhDownloadNotification.createDownloadFailedNotification(
+                    context = applicationContext,
+                    downloadState = download,
+                    createdTime = download.createdTime,
+                    notificationAccentColor = R.color.accent,
+                )
+            }
+            DownloadState.Status.CANCELLED -> return
+        }
+
+        if (isForeground) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        notifId,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    )
+                } else {
+                    startForeground(notifId, notification)
+                }
+            } catch (_: Exception) {
+                notificationsDelegate.notify(notificationId = notifId, notification = notification)
+            }
+        } else {
+            notificationsDelegate.notify(notificationId = notifId, notification = notification)
+        }
+    }
+
     private fun resumeDownloadWithRange(downloadId: String) {
-        resumeScope.launch {
+        activeRangeJobs[downloadId]?.cancel()
+        val job = resumeScope.launch {
             val initial = store.state.downloads[downloadId] ?: return@launch
             val components = (application as UHApp).components
             val offset = initial.currentBytesCopied
@@ -117,8 +199,9 @@ class UhDownloadService : AbstractFetchDownloadService() {
                     status = DownloadState.Status.DOWNLOADING
                 )
                 store.dispatch(DownloadAction.UpdateDownloadAction(latestState))
+                postNotification(latestState, isForeground = true)
 
-                val shouldScoped = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                val shouldScoped = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                     !latestState.directoryPath.startsWith("content://")
                 downloadFileWriter.useFileStream(
                     download = latestState,
@@ -144,6 +227,7 @@ class UhDownloadService : AbstractFetchDownloadService() {
                                     status = DownloadState.Status.PAUSED
                                 )
                                 store.dispatch(DownloadAction.UpdateDownloadAction(latestState))
+                                postNotification(latestState, isForeground = false)
                                 return@useStream
                             }
                             val read = input.read(buffer)
@@ -151,7 +235,7 @@ class UhDownloadService : AbstractFetchDownloadService() {
                             outStream.write(buffer, 0, read)
                             totalCopied += read
                             val now = System.currentTimeMillis()
-                            if (now - lastUiUpdate >= 250L) {
+                            if (now - lastUiUpdate >= 300L) {
                                 lastUiUpdate = now
                                 latestState = latestState.copy(
                                     currentBytesCopied = totalCopied,
@@ -159,6 +243,7 @@ class UhDownloadService : AbstractFetchDownloadService() {
                                     status = DownloadState.Status.DOWNLOADING
                                 )
                                 store.dispatch(DownloadAction.UpdateDownloadAction(latestState))
+                                postNotification(latestState, isForeground = false)
                             }
                         }
                     }
@@ -167,35 +252,45 @@ class UhDownloadService : AbstractFetchDownloadService() {
                 val currentAfter = store.state.downloads[downloadId] ?: latestState
                 if (currentAfter.status == DownloadState.Status.DOWNLOADING) {
                     val finalTotal = totalLength ?: totalCopied
-                    store.dispatch(
-                        DownloadAction.UpdateDownloadAction(
-                            currentAfter.copy(
-                                currentBytesCopied = totalCopied,
-                                contentLength = finalTotal,
-                                status = DownloadState.Status.COMPLETED
-                            )
-                        )
+                    val completed = currentAfter.copy(
+                        currentBytesCopied = totalCopied,
+                        contentLength = finalTotal,
+                        status = DownloadState.Status.COMPLETED
                     )
+                    store.dispatch(DownloadAction.UpdateDownloadAction(completed))
                     components.clearWaitingForNetwork(downloadId)
+                    try {
+                        stopForeground(STOP_FOREGROUND_DETACH)
+                    } catch (_: Exception) {}
+                    postNotification(completed, isForeground = false)
+                }
+            } catch (_: CancellationException) {
+                val latest = store.state.downloads[downloadId] ?: latestState
+                if (latest.status == DownloadState.Status.DOWNLOADING) {
+                    val paused = latest.copy(status = DownloadState.Status.PAUSED)
+                    store.dispatch(DownloadAction.UpdateDownloadAction(paused))
+                    postNotification(paused, isForeground = false)
                 }
             } catch (e: Exception) {
                 UHLog.w("download_warn", "Range resume interrupted for $downloadId: ${e.message}")
                 val latest = store.state.downloads[downloadId] ?: latestState
+                try {
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                } catch (_: Exception) {}
                 if (!components.isNetworkAvailable()) {
                     components.markWaitingForNetwork(downloadId)
-                    store.dispatch(
-                        DownloadAction.UpdateDownloadAction(
-                            latest.copy(status = DownloadState.Status.PAUSED)
-                        )
-                    )
+                    val waiting = latest.copy(status = DownloadState.Status.PAUSED)
+                    store.dispatch(DownloadAction.UpdateDownloadAction(waiting))
+                    postNotification(waiting, isForeground = false)
                 } else if (latest.status != DownloadState.Status.PAUSED && latest.status != DownloadState.Status.CANCELLED) {
-                    store.dispatch(
-                        DownloadAction.UpdateDownloadAction(
-                            latest.copy(status = DownloadState.Status.FAILED)
-                        )
-                    )
+                    val failed = latest.copy(status = DownloadState.Status.FAILED)
+                    store.dispatch(DownloadAction.UpdateDownloadAction(failed))
+                    postNotification(failed, isForeground = false)
                 }
+            } finally {
+                activeRangeJobs.remove(downloadId)
             }
         }
+        activeRangeJobs[downloadId] = job
     }
 }

@@ -6,12 +6,14 @@ import android.graphics.Color as AndroidColor
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,11 +28,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +59,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,23 +67,23 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.WindowCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.palette.graphics.Palette
 import app.harvester.companion.R
 import app.harvester.companion.Shortcut
 import app.harvester.companion.ShortcutStore
 import app.harvester.companion.TouchImageView
+import app.harvester.companion.UHBrand
 import app.harvester.companion.UHLog
 import app.harvester.companion.WallpaperStore
+import app.harvester.companion.home.ShortcutIcon
 import app.harvester.companion.theme.UHTheme
-import coil.compose.AsyncImage
 import coil.load
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -141,13 +146,13 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
                         val item = uris[page]
-                        val isVideo = item.endsWith(".mp4") || item.contains("sample") || (forceVideo && page == initialIndex)
-                        val titleColorInt = previewTextColors[page]
-                            ?: if (item == "default") AndroidColor.WHITE else AndroidColor.WHITE
+                        val isVideo = WallpaperStore.isVideoFileOrUrl(item) || (forceVideo && page == initialIndex)
+                        val titleColorInt = previewTextColors[page] ?: AndroidColor.WHITE
 
                         WallpaperPreviewPage(
                             item = item,
                             isVideo = isVideo,
+                            isLandscape = isLandscape,
                             shortcuts = shortcuts,
                             titleColorInt = titleColorInt,
                             onBindTouchView = { tv -> touchViews[page] = tv },
@@ -167,7 +172,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                         IconButton(
                             onClick = { finish() },
                             modifier = Modifier
-                                .size(42.dp)
+                                .size(40.dp)
                                 .clip(CircleShape)
                                 .background(Color.Black.copy(alpha = 0.45f))
                         ) {
@@ -175,7 +180,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                 painter = painterResource(id = R.drawable.fx_ic_close_24),
                                 contentDescription = "Close preview",
                                 tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
 
@@ -202,28 +207,40 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                     )
                                 }
 
-                                val isVideo = selectedUri.endsWith(".mp4") || (forceVideo && currentPage == initialIndex)
+                                val isVideo = WallpaperStore.isVideoFileOrUrl(selectedUri) ||
+                                    (forceVideo && currentPage == initialIndex)
                                 isApplying = 1
-                                Toast.makeText(context, "Applying wallpaper...", Toast.LENGTH_SHORT).show()
 
                                 scope.launch(Dispatchers.IO) {
                                     try {
                                         var finalUriString = selectedUri
                                         if (selectedUri.startsWith("http")) {
-                                            val downloaded = WallpaperStore.downloadRemoteWallpaper(context, selectedUri)
-                                            if (downloaded != null) {
-                                                finalUriString = downloaded
+                                            val downloaded = WallpaperStore.downloadAndPrepareWallpaper(context, selectedUri)
+                                            if (downloaded == null) {
+                                                withContext(Dispatchers.Main) {
+                                                    isApplying = 0
+                                                    Toast.makeText(context, "Failed to download wallpaper", Toast.LENGTH_SHORT).show()
+                                                }
+                                                return@launch
                                             }
+                                            finalUriString = downloaded
                                         }
-                                        val bitmap = if (isVideo) {
-                                            WallpaperStore.generateVideoThumbnail(finalUriString)
+
+                                        val resolvedIsVideo = isVideo || WallpaperStore.isVideoFileOrUrl(finalUriString)
+                                        val bitmap = if (resolvedIsVideo) {
+                                            val poster = WallpaperStore.posterFileFor(finalUriString)
+                                            if (poster.exists()) {
+                                                WallpaperStore.getSampledBitmap(poster.absolutePath, 240, 420)
+                                            } else {
+                                                WallpaperStore.generateVideoThumbnail(finalUriString)
+                                            }
                                         } else {
-                                            BitmapFactory.decodeFile(finalUriString)
+                                            WallpaperStore.getSampledBitmap(finalUriString, 240, 420)
                                         }
 
                                         val textColor = if (bitmap != null) {
                                             val palette = Palette.from(bitmap).generate()
-                                            val dom = palette.getDominantColor(AndroidColor.GRAY)
+                                            val dom = palette.getDominantColor(AndroidColor.DKGRAY)
                                             val lum = ColorUtils.calculateLuminance(dom)
                                             bitmap.recycle()
                                             if (lum > 0.5) AndroidColor.BLACK else AndroidColor.WHITE
@@ -236,28 +253,39 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                                 context,
                                                 finalUriString,
                                                 textColor,
-                                                isVideo
+                                                resolvedIsVideo
                                             )
                                             finish()
                                         }
-                                    } catch (_: Exception) {
+                                    } catch (e: Exception) {
+                                        UHLog.e("wallpaper_error", "Preview apply failed: ${e.message}")
                                         withContext(Dispatchers.Main) {
-                                            WallpaperStore.setCurrentWallpaper(context, "default", 0, false)
-                                            finish()
+                                            isApplying = 0
+                                            Toast.makeText(context, "Could not apply wallpaper", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
                             },
-                            shape = RoundedCornerShape(20.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
+                            shape = RoundedCornerShape(18.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp)
                         ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.fx_ic_check_24),
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (isApplying == 0) "Set Wallpaper" else "Applying...")
+                            if (isApplying != 0) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Optimizing...", fontSize = 13.sp)
+                            } else {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.fx_ic_check_24),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Set Wallpaper", fontSize = 13.sp)
+                            }
                         }
                     }
                 }
@@ -266,10 +294,12 @@ class WallpaperPreviewActivity : AppCompatActivity() {
     }
 }
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun WallpaperPreviewPage(
     item: String,
     isVideo: Boolean,
+    isLandscape: Boolean,
     shortcuts: List<Shortcut>,
     titleColorInt: Int,
     onBindTouchView: (TouchImageView) -> Unit,
@@ -291,19 +321,18 @@ private fun WallpaperPreviewPage(
             }
             isVideo -> {
                 val exoPlayer = remember(item) {
-                    val renderers = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+                    val renderers = DefaultRenderersFactory(context)
+                        .setEnableDecoderFallback(true)
+                        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
                     ExoPlayer.Builder(context, renderers).build().apply {
                         val mediaUri = if (item.startsWith("http")) Uri.parse(item) else Uri.fromFile(File(item))
-                        val mediaItem = MediaItem.Builder()
-                            .setUri(mediaUri)
-                            .setMimeType(MimeTypes.APPLICATION_MP4)
-                            .build()
-                        setMediaItem(mediaItem)
+                        setMediaItem(MediaItem.fromUri(mediaUri))
                         volume = 0f
                         repeatMode = Player.REPEAT_MODE_ONE
+                        videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
                         addListener(object : Player.Listener {
                             override fun onPlayerError(error: PlaybackException) {
-                                UHLog.e("video", "ExoPlayer Error: ${error.message}")
+                                UHLog.e("video", "ExoPlayer Preview Error: ${error.message}")
                             }
                         })
                         prepare()
@@ -320,13 +349,11 @@ private fun WallpaperPreviewPage(
 
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            useController = false
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        (LayoutInflater.from(ctx).inflate(R.layout.uh_wallpaper_player_view, null, false) as PlayerView).apply {
                             player = exoPlayer
                         }
                     },
-                    update = { pv -> pv.player = exoPlayer },
+                    update = { pv -> if (pv.player !== exoPlayer) pv.player = exoPlayer },
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -352,7 +379,7 @@ private fun WallpaperPreviewPage(
                                     val bmp = (result.drawable as? BitmapDrawable)?.bitmap
                                     if (bmp != null) {
                                         val palette = Palette.from(bmp).generate()
-                                        val dom = palette.getDominantColor(AndroidColor.GRAY)
+                                        val dom = palette.getDominantColor(AndroidColor.DKGRAY)
                                         val lum = ColorUtils.calculateLuminance(dom)
                                         onDetectedTextColor(if (lum > 0.5) AndroidColor.BLACK else AndroidColor.WHITE)
                                     }
@@ -368,6 +395,7 @@ private fun WallpaperPreviewPage(
             }
         }
 
+        // Home Layout Preview Overlay
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -376,94 +404,137 @@ private fun WallpaperPreviewPage(
                 .padding(horizontal = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(78.dp))
-            Text(
-                text = "Harvester",
-                color = titleColor,
-                fontSize = 32.sp,
-                fontFamily = FontFamily(Font(R.font.app_font)),
-                style = TextStyle(
-                    shadow = if (item == "default") null else Shadow(
-                        color = shadowColor,
-                        offset = Offset(0f, 2f),
-                        blurRadius = 8f
-                    )
-                )
-            )
-            Spacer(modifier = Modifier.height(28.dp))
-
-            shortcuts.chunked(4).forEach { rowItems ->
+            if (isLandscape) {
+                Spacer(modifier = Modifier.height(52.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        .weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    rowItems.forEach { s ->
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                AsyncImage(
-                                    model = s.iconUrl,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(30.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(5.dp))
-                            Text(
-                                text = s.name,
-                                color = titleColor,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                                style = TextStyle(
-                                    shadow = if (item == "default") null else Shadow(
-                                        color = shadowColor,
-                                        offset = Offset(0f, 1.5f),
-                                        blurRadius = 6f
-                                    )
-                                )
+                    Column(
+                        modifier = Modifier.widthIn(min = 120.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = UHBrand.NAME,
+                            color = titleColor,
+                            fontSize = 36.sp,
+                            fontFamily = FontFamily(Font(R.font.logo_font)),
+                            letterSpacing = 3.sp,
+                            style = TextStyle(
+                                shadow = if (item == "default") null else Shadow(shadowColor, Offset(0f, 2f), 8f)
                             )
-                        }
+                        )
                     }
-                    repeat(4 - rowItems.size) {
-                        Spacer(modifier = Modifier.weight(1f))
+                    Column(modifier = Modifier.weight(1f)) {
+                        PreviewShortcutRows(shortcuts = shortcuts, columns = 4, titleColor = titleColor, shadowColor = shadowColor, hasCustomBg = item != "default")
                     }
                 }
+            } else {
+                Spacer(modifier = Modifier.height(78.dp))
+                Text(
+                    text = UHBrand.NAME,
+                    color = titleColor,
+                    fontSize = 42.sp,
+                    fontFamily = FontFamily(Font(R.font.logo_font)),
+                    letterSpacing = 3.sp,
+                    style = TextStyle(
+                        shadow = if (item == "default") null else Shadow(
+                            color = shadowColor,
+                            offset = Offset(0f, 2f),
+                            blurRadius = 8f
+                        )
+                    )
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                PreviewShortcutRows(shortcuts = shortcuts, columns = 4, titleColor = titleColor, shadowColor = shadowColor, hasCustomBg = item != "default")
+                Spacer(modifier = Modifier.weight(1f))
             }
-
-            Spacer(modifier = Modifier.weight(1f))
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp)
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 18.dp),
+                    .padding(bottom = 14.dp)
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = "Search or enter address",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp
+                    fontSize = 13.sp
                 )
                 Text(
                     text = "1",
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 12.sp
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewShortcutRows(
+    shortcuts: List<Shortcut>,
+    columns: Int,
+    titleColor: Color,
+    shadowColor: Color,
+    hasCustomBg: Boolean
+) {
+    shortcuts.chunked(columns).forEach { rowItems ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            rowItems.forEach { s ->
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))
+                            .border(0.5.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(14.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ShortcutIcon(
+                            iconUrl = s.iconUrl,
+                            pageUrl = s.url,
+                            label = s.name,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = s.name,
+                        color = titleColor,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        style = TextStyle(
+                            shadow = if (!hasCustomBg) null else Shadow(
+                                color = shadowColor,
+                                offset = Offset(0f, 1.5f),
+                                blurRadius = 6f
+                            )
+                        )
+                    )
+                }
+            }
+            repeat(columns - rowItems.size) {
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }

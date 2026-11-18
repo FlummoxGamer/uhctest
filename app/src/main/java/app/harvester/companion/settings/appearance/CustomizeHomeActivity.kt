@@ -1,6 +1,7 @@
 package app.harvester.companion.settings.appearance
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import android.widget.Toast
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -49,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -141,29 +144,35 @@ class CustomizeHomeActivity : AppCompatActivity() {
             UHTheme {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
+                val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+                val columns = if (isLandscape) 6 else 4
                 val tick = reloadTick
                 val wallpaperState by WallpaperStore.wallpaperFlow(context).collectAsState()
                 val activePath = wallpaperState.path ?: "default"
                 val storedRecents = remember(tick, activePath) {
-                    WallpaperStore.getRecent(context).take(2)
+                    WallpaperStore.getRecent(context).take(if (isLandscape) 4 else 2)
                 }
                 var showResetConfirm by remember { mutableStateOf(false) }
+                var isImportingImage by remember { mutableStateOf(false) }
 
                 val pickMedia = rememberLauncherForActivityResult(
                     ActivityResultContracts.PickVisualMedia()
                 ) { uri ->
                     if (uri != null) {
-                        val mime = context.contentResolver.getType(uri)
-                        if (mime != null && mime.startsWith("video/")) {
+                        val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
+                        val isVideo = mime.startsWith("video/") ||
+                            WallpaperStore.isVideoFileOrUrl(uri.toString())
+                        if (isVideo) {
                             context.startActivity(
                                 Intent(context, TrimVideoActivity::class.java)
                                     .putExtra("videoUri", uri.toString())
                             )
                         } else {
-                            Toast.makeText(context, "Processing image...", Toast.LENGTH_SHORT).show()
+                            isImportingImage = true
                             scope.launch(Dispatchers.IO) {
                                 val localPath = WallpaperStore.saveWallpaper(context, uri)
                                 withContext(Dispatchers.Main) {
+                                    isImportingImage = false
                                     if (localPath != null) {
                                         context.startActivity(
                                             Intent(context, WallpaperPreviewActivity::class.java).apply {
@@ -172,12 +181,31 @@ class CustomizeHomeActivity : AppCompatActivity() {
                                             }
                                         )
                                     } else {
-                                        Toast.makeText(context, "Failed to save wallpaper", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Failed to optimize wallpaper", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
                         }
                     }
+                }
+
+                if (isImportingImage) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        confirmButton = {},
+                        title = { Text("Optimizing Image", color = MaterialTheme.colorScheme.onSurface) },
+                        text = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                Text("Converting to crisp WebP...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(18.dp)
+                    )
                 }
 
                 if (showResetConfirm) {
@@ -245,7 +273,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                         add(HomeWallpaperTile.Default)
                         storedRecents.forEach { path ->
                             add(
-                                if (path.endsWith(".mp4")) HomeWallpaperTile.Motion(path)
+                                if (WallpaperStore.isVideoFileOrUrl(path)) HomeWallpaperTile.Motion(path)
                                 else HomeWallpaperTile.Custom(path)
                             )
                         }
@@ -253,6 +281,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
 
                     WallpaperTileGrid(
                         tiles = topTiles,
+                        columns = columns,
                         activePath = activePath,
                         onTileClick = { tile ->
                             when (tile) {
@@ -290,7 +319,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                                 Intent(context, WallpaperPreviewActivity::class.java).apply {
                                     putExtra("imagePath", path)
                                     putExtra("isCustom", true)
-                                    putExtra("isVideo", path.endsWith(".mp4"))
+                                    putExtra("isVideo", WallpaperStore.isVideoFileOrUrl(path))
                                 }
                             )
                         },
@@ -311,6 +340,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                         val isVideo = genre == "Motion"
                         WallpaperTileGrid(
                             tiles = urls.map { HomeWallpaperTile.Remote(it, isVideo) },
+                            columns = columns,
                             activePath = activePath,
                             onTileClick = { tile ->
                                 if (tile is HomeWallpaperTile.Remote) {
@@ -364,13 +394,14 @@ sealed class HomeWallpaperTile {
 @Composable
 fun WallpaperTileGrid(
     tiles: List<HomeWallpaperTile>,
+    columns: Int = 4,
     activePath: String,
     onTileClick: (HomeWallpaperTile) -> Unit,
     onSetFromMenu: (String) -> Unit,
     onDeleteFromMenu: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        tiles.chunked(4).forEach { rowTiles ->
+        tiles.chunked(columns).forEach { rowTiles ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -386,7 +417,7 @@ fun WallpaperTileGrid(
                         )
                     }
                 }
-                repeat(4 - rowTiles.size) {
+                repeat(columns - rowTiles.size) {
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }
@@ -465,11 +496,18 @@ private fun WallpaperGridTile(
                 )
             }
             is HomeWallpaperTile.Motion -> {
-                val model: Any = if (tile.path.startsWith("http")) tile.path else File(tile.path)
-                val req = remember(tile.path) {
+                val poster = WallpaperStore.posterFileFor(tile.path)
+                val model: Any = when {
+                    poster.exists() -> poster
+                    tile.path.startsWith("http") -> tile.path
+                    else -> File(tile.path)
+                }
+                val req = remember(tile.path, poster.exists()) {
                     ImageRequest.Builder(context)
                         .data(model)
-                        .videoFrameMillis(1000L)
+                        .apply {
+                            if (!poster.exists()) videoFrameMillis(500L)
+                        }
                         .crossfade(true)
                         .build()
                 }
@@ -486,7 +524,7 @@ private fun WallpaperGridTile(
                     ImageRequest.Builder(context)
                         .data(tile.url)
                         .apply {
-                            if (tile.isVideo) videoFrameMillis(1000L)
+                            if (tile.isVideo) videoFrameMillis(500L)
                         }
                         .crossfade(true)
                         .build()

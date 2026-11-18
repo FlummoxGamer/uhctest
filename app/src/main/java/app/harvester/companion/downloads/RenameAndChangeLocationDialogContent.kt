@@ -1,6 +1,5 @@
 package app.harvester.companion.downloads
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,11 +8,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -38,13 +40,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.io.File
 import app.harvester.companion.R
 import app.harvester.companion.data.downloads.UhRenameFileError
+import java.io.File
 
 @Composable
 fun RenameAndChangeLocationDialogContent(
@@ -72,14 +75,13 @@ fun RenameAndChangeLocationDialogContent(
     LaunchedEffect(isFocused) {
         if (isFocused) {
             val text = fileNameState.text
-            val end = File(text).nameWithoutExtension.length
-            fileNameState = fileNameState.copy(selection = TextRange(0, end))
+            fileNameState = fileNameState.copy(selection = TextRange(0, text.length))
         }
     }
 
     val currentError: UhRenameFileError? =
         when {
-            fileNameState.text.contains("/") -> UhRenameFileError.InvalidFileName
+            fileNameState.text.contains("/") || fileNameState.text.contains("\u0000") -> UhRenameFileError.InvalidFileName
             else -> null
         }
 
@@ -90,7 +92,8 @@ fun RenameAndChangeLocationDialogContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 20.dp),
+            .imePadding()
+            .padding(horizontal = 20.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.Start,
     ) {
         Column(
@@ -102,11 +105,11 @@ fun RenameAndChangeLocationDialogContent(
         ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurface,
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             OutlinedTextField(
                 value = fileNameState,
@@ -120,13 +123,19 @@ fun RenameAndChangeLocationDialogContent(
                 label = { Text(stringResource(R.string.download_rename_dialog_label)) },
                 suffix = { if (extension.isNotEmpty()) Text(".$extension") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        if (isConfirmEnabled) onConfirm()
+                    }
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
                     .onFocusChanged { focusState -> isFocused = focusState.isFocused },
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
                 text = stringResource(R.string.download_save_in_label),
@@ -139,9 +148,9 @@ fun RenameAndChangeLocationDialogContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
                     .clickable { onDirectorySelect() }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -168,14 +177,14 @@ fun RenameAndChangeLocationDialogContent(
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { onRememberChange(!dialogState.rememberAsDefault) }
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Checkbox(
@@ -194,7 +203,7 @@ fun RenameAndChangeLocationDialogContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 16.dp),
+                .padding(top = 14.dp),
             horizontalArrangement = Arrangement.End,
         ) {
             TextButton(onClick = onCancel) {
