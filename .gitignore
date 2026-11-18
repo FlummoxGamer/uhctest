@@ -1,5 +1,8 @@
-# Gradle build cache and internal files
 .gradle/
 build/
 **/build/
 .local/
+
+server.js
+package.json
+node_modules/
