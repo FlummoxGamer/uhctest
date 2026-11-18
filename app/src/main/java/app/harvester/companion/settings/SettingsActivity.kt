@@ -141,16 +141,6 @@ class SettingsActivity : AppCompatActivity() {
                             )
                             UhSettingsDivider()
                             SettingsRow(
-                                title = "Lock Access",
-                                iconRes = R.drawable.fx_ic_lock_24,
-                                showChevron = true,
-                                insideCard = true,
-                                onClick = {
-                                    Toast.makeText(context, "Lock Access coming soon", Toast.LENGTH_SHORT).show()
-                                }
-                            )
-                            UhSettingsDivider()
-                            SettingsRow(
                                 title = "Manage Personal Data",
                                 iconRes = R.drawable.fx_ic_storage_24,
                                 showChevron = true,
@@ -164,26 +154,12 @@ class SettingsActivity : AppCompatActivity() {
                         SettingsCategory("About")
                         UhSettingsCardGroup {
                             SettingsRow(
-                                title = "Version",
-                                subtitle = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                                iconRes = R.drawable.fx_ic_info_24,
-                                showChevron = true,
-                                insideCard = true,
-                                onClick = {
-                                    Toast.makeText(
-                                        context,
-                                        "UH ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            )
-                            UhSettingsDivider()
-                            SettingsRow(
                                 title = "Check for update",
+                                subtitle = "Installed v${BuildConfig.VERSION_NAME}",
                                 iconRes = R.drawable.fx_ic_update_24,
                                 showChevron = true,
                                 insideCard = true,
-                                onClick = { UpdateChecker.checkAndPrompt(this@SettingsActivity) }
+                                onClick = { UpdateChecker.openUpdater(this@SettingsActivity) }
                             )
                             UhSettingsDivider()
                             SettingsRow(

@@ -7,13 +7,16 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.activityViewModels
 import androidx.navigation.fragment.NavHostFragment
 import app.harvester.companion.R
+import app.harvester.companion.ThemePrefs
 import app.harvester.companion.UHApp
 import app.harvester.companion.UHLog
 import app.harvester.companion.browser.BrowserViewModel
@@ -22,6 +25,13 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.R as materialR
+
+data class ClosedTabSnapshot(
+    val url: String,
+    val title: String,
+    val isPrivate: Boolean,
+    val groupId: String?
+)
 
 class TabsTrayDialogFragment : BottomSheetDialogFragment() {
 
@@ -35,7 +45,7 @@ class TabsTrayDialogFragment : BottomSheetDialogFragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setStyle(STYLE_NO_FRAME, theme)
+        setStyle(STYLE_NORMAL, theme)
     }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
@@ -44,11 +54,29 @@ class TabsTrayDialogFragment : BottomSheetDialogFragment() {
                 WindowCompat.setDecorFitsSystemWindows(w, false)
                 w.statusBarColor = Color.TRANSPARENT
                 w.navigationBarColor = Color.TRANSPARENT
+                w.setFlags(
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                )
                 w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                val isDark = ThemePrefs.isDarkActive(requireContext())
+                val insetsController = WindowCompat.getInsetsController(w, w.decorView)
+                insetsController.isAppearanceLightStatusBars = !isDark
+                insetsController.isAppearanceLightNavigationBars = !isDark
             }
             setOnShowListener {
+                // Strip fitsSystemWindows on Material container/coordinator so tray extends behind status & nav bars edge-to-edge
+                findViewById<View?>(materialR.id.container)?.let { container ->
+                    container.fitsSystemWindows = false
+                    ViewCompat.setOnApplyWindowInsetsListener(container) { _, insets -> insets }
+                }
+                findViewById<View?>(materialR.id.coordinator)?.let { coordinator ->
+                    coordinator.fitsSystemWindows = false
+                    ViewCompat.setOnApplyWindowInsetsListener(coordinator) { _, insets -> insets }
+                }
                 val bottomSheet = findViewById<View?>(materialR.id.design_bottom_sheet)
                 bottomSheet?.let { sheet ->
+                    sheet.fitsSystemWindows = false
                     sheet.setBackgroundResource(android.R.color.transparent)
                     sheet.layoutParams = sheet.layoutParams.apply {
                         width = ViewGroup.LayoutParams.MATCH_PARENT
@@ -103,6 +131,17 @@ class TabsTrayDialogFragment : BottomSheetDialogFragment() {
                         onCloseTab = { tabId ->
                             TabGroupStore.removeTabFromGroups(tabId)
                             components.useCases.tabsUseCases.removeTab(tabId)
+                        },
+                        onRestoreClosedTab = { snapshot ->
+                            val targetUrl = snapshot.url.ifBlank { "about:blank" }
+                            val restoredId = components.useCases.tabsUseCases.addTab(
+                                url = targetUrl,
+                                selectTab = true,
+                                private = snapshot.isPrivate
+                            )
+                            snapshot.groupId?.let { gid ->
+                                TabGroupStore.addTabToGroup(gid, restoredId)
+                            }
                         },
                         onCloseAllTabs = { isPrivate ->
                             val targetTabs = tabs.filter { it.content.private == isPrivate }

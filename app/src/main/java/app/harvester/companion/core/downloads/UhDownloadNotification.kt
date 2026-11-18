@@ -51,7 +51,8 @@ internal object UhDownloadNotification {
             .setStyle(NotificationCompat.InboxStyle().addLine(summaryLine1).addLine(summaryLine2))
             .setGroup(NOTIFICATION_GROUP_KEY)
             .setGroupSummary(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
@@ -202,9 +203,9 @@ internal object UhDownloadNotification {
         intent.putExtra("INTENT_EXTRA_DOWNLOAD_ID", downloadStateId)
         return PendingIntent.getBroadcast(
             context.applicationContext,
-            Random.nextInt(),
+            ("$downloadStateId::$action").hashCode(),
             intent,
-            PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
 

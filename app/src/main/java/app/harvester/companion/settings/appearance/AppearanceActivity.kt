@@ -3,10 +3,10 @@ package app.harvester.companion.settings.appearance
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,6 +39,7 @@ import app.harvester.companion.SettingsPrefs
 import app.harvester.companion.ThemePrefs
 import app.harvester.companion.settings.components.SettingsCategory
 import app.harvester.companion.settings.components.SettingsRow
+import app.harvester.companion.settings.components.SettingsSwitchItem
 import app.harvester.companion.settings.components.SettingsSwitchRow
 import app.harvester.companion.settings.components.UhSettingsCardGroup
 import app.harvester.companion.settings.components.UhSettingsDivider
@@ -57,6 +58,16 @@ class AppearanceActivity : AppCompatActivity() {
             UHTheme {
                 val context = LocalContext.current
                 val themeMode by ThemePrefs.modeFlow(context).collectAsState()
+                val amoledDark by SettingsPrefs.amoledDarkFlow(context).collectAsState()
+                val enhanceDark by SettingsPrefs.enhanceDarkFlow(context).collectAsState()
+                val trustPanelStyle by SettingsPrefs.trustPanelStyleFlow(context).collectAsState()
+                val systemDark = isSystemInDarkTheme()
+                val isDarkActive = when (themeMode) {
+                    ThemePrefs.MODE_DARK -> true
+                    ThemePrefs.MODE_LIGHT -> false
+                    else -> systemDark
+                }
+
                 var showSleepPicker by remember { mutableStateOf(false) }
                 var sleepSeconds by remember {
                     mutableIntStateOf(SettingsPrefs.getInt(context, SettingsPrefs.K_TAB_SLEEP_SECONDS, 120))
@@ -120,23 +131,40 @@ class AppearanceActivity : AppCompatActivity() {
                         UhSettingsDivider()
                         ThemeOptionRow(
                             title = "Light",
+                            subtitle = "Pure white canvas with soft slate cards",
                             selected = themeMode == ThemePrefs.MODE_LIGHT,
                             onClick = { ThemePrefs.setMode(context, ThemePrefs.MODE_LIGHT) }
                         )
                         UhSettingsDivider()
                         ThemeOptionRow(
                             title = "Dark",
+                            subtitle = "Deep obsidian canvas with elevated slate cards",
                             selected = themeMode == ThemePrefs.MODE_DARK,
                             onClick = { ThemePrefs.setMode(context, ThemePrefs.MODE_DARK) }
                         )
-                        UhSettingsDivider()
-                        SettingsSwitchRow(
-                            title = "Enhance Dark Theme",
-                            subtitle = "Apply deeper contrast across dark surfaces",
-                            key = SettingsPrefs.K_ENHANCE_DARK,
-                            default = false,
-                            insideCard = true
-                        )
+                        if (isDarkActive) {
+                            UhSettingsDivider()
+                            SettingsSwitchItem(
+                                title = "AMOLED Pure Black",
+                                subtitle = "Use true #000000 black surfaces across the app",
+                                checked = amoledDark,
+                                insideCard = true,
+                                onCheckedChange = { checked ->
+                                    SettingsPrefs.setBool(context, SettingsPrefs.K_AMOLED_DARK, checked)
+                                }
+                            )
+                            UhSettingsDivider()
+                            SettingsSwitchItem(
+                                title = "Enhance Dark Mode",
+                                subtitle = "Darken web pages and search results automatically",
+                                checked = enhanceDark,
+                                insideCard = true,
+                                onCheckedChange = { checked ->
+                                    SettingsPrefs.setBool(context, SettingsPrefs.K_ENHANCE_DARK, checked)
+                                    ThemePrefs.syncWebAppearance(context)
+                                }
+                            )
+                        }
                     }
 
                     SettingsCategory("Customize")
@@ -162,6 +190,27 @@ class AppearanceActivity : AppCompatActivity() {
                                 context.startActivity(Intent(context, CustomizeAddressBarActivity::class.java))
                             }
                         )
+                        UhSettingsDivider()
+                        val panelLabel = if (trustPanelStyle == SettingsPrefs.TRUST_STYLE_CYBERPUNK) {
+                            "Dark Cyberpunk Glass HUD"
+                        } else {
+                            "Adaptive M3 + Sci-Fi Telemetry"
+                        }
+                        SettingsRow(
+                            title = "Trust Panel Style",
+                            subtitle = panelLabel,
+                            iconRes = R.drawable.fx_ic_shield_lock_24,
+                            showChevron = false,
+                            insideCard = true,
+                            onClick = {
+                                val next = if (trustPanelStyle == SettingsPrefs.TRUST_STYLE_CYBERPUNK) {
+                                    SettingsPrefs.TRUST_STYLE_ADAPTIVE
+                                } else {
+                                    SettingsPrefs.TRUST_STYLE_CYBERPUNK
+                                }
+                                SettingsPrefs.setString(context, SettingsPrefs.K_TRUST_PANEL_STYLE, next)
+                            }
+                        )
                     }
 
                     SettingsCategory("Tabs")
@@ -183,10 +232,10 @@ class AppearanceActivity : AppCompatActivity() {
                         )
                         UhSettingsDivider()
                         SettingsSwitchRow(
-                            title = "Confirm swipe-to-close",
-                            subtitle = "Ask before closing tabs by swiping",
-                            key = SettingsPrefs.K_TAB_CONFIRM_SWIPE,
-                            default = false,
+                            title = "Grid view in Tabs",
+                            subtitle = "Show open tabs in a two-column preview grid",
+                            key = SettingsPrefs.K_TAB_LAYOUT_GRID,
+                            default = true,
                             insideCard = true
                         )
                         UhSettingsDivider()

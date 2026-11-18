@@ -206,6 +206,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("com.google.mlkit:text-recognition:16.0.0")
+    implementation("com.google.mlkit:translate:17.0.3")
     implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("io.coil-kt:coil:2.6.0")
     implementation("io.coil-kt:coil-compose:2.6.0")

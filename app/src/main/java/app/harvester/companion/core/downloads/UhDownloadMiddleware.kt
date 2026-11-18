@@ -77,7 +77,15 @@ class UhDownloadMiddleware(
             is DownloadAction.RemoveDeletedDownloads -> removeDeletedDownloads(store)
             is ContentAction.CancelDownloadAction -> closeDownloadResponse(store, action.sessionId)
             is DownloadAction.AddDownloadAction -> {
-                if (!action.download.private && !saveDownload(store, action.download)) {
+                val normalized = if (action.download.notificationId == null) {
+                    action.download.copy(
+                        notificationId = (action.download.id.hashCode() and 0x7fffffff).coerceAtLeast(1000)
+                    )
+                } else {
+                    action.download
+                }
+                effectiveAction = DownloadAction.AddDownloadAction(normalized)
+                if (!normalized.private && !saveDownload(store, normalized)) {
                     return
                 }
             }

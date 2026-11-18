@@ -63,7 +63,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _findTotal = MutableStateFlow(0)
     val findTotal: StateFlow<Int> = _findTotal
 
-    // Page zoom state
+    // Page zoom state (per-origin + global default)
+    private val originZoomMap = mutableMapOf<String, Int>()
+    private var currentZoomOrigin: String = ""
+
     private val _pageZoomPercent = MutableStateFlow(
         SettingsPrefs.getInt(context, SettingsPrefs.K_TEXT_SCALE, 100).coerceIn(50, 200)
     )
@@ -85,6 +88,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     private val _showAddToHomeDialog = MutableStateFlow(false)
     val showAddToHomeDialog: StateFlow<Boolean> = _showAddToHomeDialog
+
+    private val _showBookmarksSheet = MutableStateFlow(false)
+    val showBookmarksSheet: StateFlow<Boolean> = _showBookmarksSheet
 
     private var suggestJob: Job? = null
     private var lastBookmarkUrl: String = ""
@@ -217,6 +223,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     // ---- Page Zoom ----
 
+    fun syncZoomForUrl(url: String?) {
+        val host = runCatching { java.net.URI(url.orEmpty()).host?.lowercase().orEmpty() }.getOrDefault("")
+        if (host == currentZoomOrigin) return
+        currentZoomOrigin = host
+        val defaultZoom = SettingsPrefs.getInt(context, SettingsPrefs.K_TEXT_SCALE, 100).coerceIn(50, 200)
+        val saved = originZoomMap[host] ?: defaultZoom
+        if (_pageZoomPercent.value != saved) {
+            _pageZoomPercent.value = saved
+        }
+        applyZoomToEngine(saved)
+    }
+
     fun openZoomBar() {
         _showFindInPage.value = false
         _showZoomBar.value = true
@@ -229,18 +247,28 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun setPageZoom(percent: Int) {
         val clamped = percent.coerceIn(50, 200)
         _pageZoomPercent.value = clamped
-        SettingsPrefs.setInt(context, SettingsPrefs.K_TEXT_SCALE, clamped)
-        val factor = clamped / 100f
-        try {
-            components.engine.settings.fontSizeFactor = factor
-            components.engine.settings.fontInflationEnabled = clamped != 100
-        } catch (_: Exception) {}
+        if (currentZoomOrigin.isNotBlank()) {
+            if (clamped == 100) originZoomMap.remove(currentZoomOrigin)
+            else originZoomMap[currentZoomOrigin] = clamped
+        } else {
+            SettingsPrefs.setInt(context, SettingsPrefs.K_TEXT_SCALE, clamped)
+        }
+        applyZoomToEngine(clamped)
+    }
+
+    private fun applyZoomToEngine(percent: Int) {
+        val factor = percent / 100f
         try {
             val activeSession = components.store.state.selectedTab?.engineState?.engineSession
             if (activeSession != null) {
                 activeSession.settings.fontSizeFactor = factor
-                activeSession.settings.fontInflationEnabled = clamped != 100
+                activeSession.settings.fontInflationEnabled = percent != 100
             }
+        } catch (_: Exception) {}
+        try {
+            val enhanceDark = SettingsPrefs.getBool(context, SettingsPrefs.K_ENHANCE_DARK, false) &&
+                app.harvester.companion.ThemePrefs.isDarkActive(context)
+            app.harvester.companion.GeckoWebExtensionBridge.pushAppearanceUpdate(enhanceDark, percent)
         } catch (_: Exception) {}
     }
 
@@ -307,6 +335,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun openAddToHomeDialog() { _showAddToHomeDialog.value = true }
     fun closeAddToHomeDialog() { _showAddToHomeDialog.value = false }
 
+    fun openBookmarksSheet() { _showBookmarksSheet.value = true }
+    fun closeBookmarksSheet() { _showBookmarksSheet.value = false }
+
     fun addToUhHomeGrid(url: String, title: String): Boolean {
         if (url.isBlank() || url == "about:blank") return false
         val name = title.ifBlank { ShortcutStore.shortNameFor(url) }.take(24)
@@ -330,17 +361,38 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         val label = title.ifBlank { ShortcutStore.shortNameFor(url) }.take(32)
-        val launchIntent = Intent(activityContext, HomeActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            data = android.net.Uri.parse(url)
+        val tabIcon = components.store.state.selectedTab?.content?.icon
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val bitmap = tabIcon ?: run {
+                val cached = app.harvester.companion.home.ShortcutIconCache.resolveIcon(
+                    activityContext,
+                    url,
+                    ShortcutStore.iconUrlFor(url)
+                )
+                cached?.let { android.graphics.BitmapFactory.decodeFile(it.absolutePath) }
+            }
+
+            val launchIntent = Intent(activityContext, HomeActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = android.net.Uri.parse(url)
+            }
+            val iconCompat = if (bitmap != null) {
+                IconCompat.createWithBitmap(bitmap)
+            } else {
+                IconCompat.createWithResource(activityContext, R.mipmap.ic_launcher)
+            }
+            val shortcutInfo = ShortcutInfoCompat.Builder(activityContext, "uh_pin_${url.hashCode()}")
+                .setShortLabel(label)
+                .setLongLabel(label)
+                .setIcon(iconCompat)
+                .setIntent(launchIntent)
+                .build()
+
+            withContext(Dispatchers.Main) {
+                ShortcutManagerCompat.requestPinShortcut(activityContext, shortcutInfo, null)
+            }
         }
-        val shortcutInfo = ShortcutInfoCompat.Builder(activityContext, "uh_pin_${url.hashCode()}")
-            .setShortLabel(label)
-            .setLongLabel(label)
-            .setIcon(IconCompat.createWithResource(activityContext, R.mipmap.ic_launcher))
-            .setIntent(launchIntent)
-            .build()
-        ShortcutManagerCompat.requestPinShortcut(activityContext, shortcutInfo, null)
     }
 
     private fun geckoSessionForTab(tabId: String?): GeckoSession? {

@@ -52,7 +52,9 @@ class Components(val context: Context) {
     val appStore: AppStore by lazy { AppStore() }
 
     val runtime: GeckoRuntime by lazy {
-        GeckoRuntime.create(context.applicationContext)
+        GeckoRuntime.create(context.applicationContext).also { rt ->
+            app.harvester.companion.settings.addons.ExtensionInstallManager.ensurePromptDelegate(rt)
+        }
     }
 
     val client: Client by lazy {
@@ -176,6 +178,7 @@ class Components(val context: Context) {
             middleware = middlewareList + EngineMiddleware.create(engine, trimMemoryAutomatically = false)
         )
         app.harvester.companion.GeckoWebExtensionBridge.init(context.applicationContext, runtime, this)
+        app.harvester.companion.settings.privacy.PrivacyEngineSync.applyAll(context.applicationContext, this)
         app.harvester.companion.settings.addons.UBlockOriginManager.init(context.applicationContext, runtime)
         registerNetworkResumeCallback(browserStore)
         browserStore

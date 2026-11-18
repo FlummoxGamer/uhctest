@@ -61,10 +61,16 @@ import app.harvester.companion.UHApp
 import app.harvester.companion.UHLog
 import app.harvester.companion.UserscriptManager
 import app.harvester.companion.browser.BrowserViewModel
+import app.harvester.companion.browser.devtools.DevToolsManager
+import app.harvester.companion.browser.devtools.DevToolsSheet
+import app.harvester.companion.browser.menu.BookmarksSheet
 import app.harvester.companion.browser.menu.CaptureQuickSheet
 import app.harvester.companion.browser.menu.MainMenuDialogFragment
 import app.harvester.companion.browser.menu.ScriptsSheet
 import app.harvester.companion.browser.search.UHSearchEnginePicker
+import app.harvester.companion.browser.translate.TranslateBar
+import app.harvester.companion.browser.translate.TranslateSettingsDialog
+import app.harvester.companion.browser.translate.TranslationManager
 import app.harvester.companion.search.UhSearchViewModel
 import app.harvester.companion.search.ui.UhSearchScreen
 import app.harvester.companion.settings.trustpanel.TrustPanelFragment
@@ -92,6 +98,10 @@ fun UhGlobalToolbar(
     val showScriptsSheet by viewModel.showScriptsSheet.collectAsState()
     val showCaptureQuickSheet by viewModel.showCaptureQuickSheet.collectAsState()
     val showAddToHomeDialog by viewModel.showAddToHomeDialog.collectAsState()
+    val showBookmarksSheet by viewModel.showBookmarksSheet.collectAsState()
+    val showTranslateBar by TranslationManager.showBar.collectAsState()
+    val showTranslateSettings by TranslationManager.showSettingsSheet.collectAsState()
+    val showDevTools by DevToolsManager.isOpen.collectAsState()
 
     val browserState by components.store.stateFlow.collectAsState()
     val selectedTab = browserState.selectedTab
@@ -124,6 +134,12 @@ fun UhGlobalToolbar(
         } else 0
     }
     val isCaptureActive = SessionRecorder.isActive()
+
+    LaunchedEffect(displayUrl, isBrowser) {
+        if (isBrowser && displayUrl.isNotBlank()) {
+            viewModel.syncZoomForUrl(displayUrl)
+        }
+    }
 
     val iconState = if (isBrowser) {
         when {
@@ -258,6 +274,9 @@ fun UhGlobalToolbar(
                 contentAlignment = if (isBarBottom) Alignment.BottomCenter else Alignment.TopCenter
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
+                    if (isBrowser && showTranslateBar && isBarBottom) {
+                        TranslateBar()
+                    }
                     if (isBrowser && showFindInPage && isBarBottom) {
                         FindInPageBar(
                             query = findQuery,
@@ -309,6 +328,9 @@ fun UhGlobalToolbar(
                         modifier = barPositionModifier
                     )
 
+                    if (isBrowser && showTranslateBar && !isBarBottom) {
+                        TranslateBar()
+                    }
                     if (isBrowser && showFindInPage && !isBarBottom) {
                         FindInPageBar(
                             query = findQuery,
@@ -351,6 +373,31 @@ fun UhGlobalToolbar(
         CaptureQuickSheet(
             onDismiss = { viewModel.closeCaptureQuickSheet() }
         )
+    }
+
+    if (showDevTools) {
+        DevToolsSheet(
+            currentUrl = displayUrl,
+            onDismiss = { DevToolsManager.setOpen(false) }
+        )
+    }
+
+    if (showBookmarksSheet) {
+        BookmarksSheet(
+            onOpenUrl = { url ->
+                if (isBrowser) {
+                    components.useCases.sessionUseCases.loadUrl(url)
+                } else {
+                    val bundle = Bundle().apply { putString("url", url) }
+                    navController.navigate(R.id.action_homeFragment_to_browserFragment, bundle)
+                }
+            },
+            onDismiss = { viewModel.closeBookmarksSheet() }
+        )
+    }
+
+    if (showTranslateSettings) {
+        TranslateSettingsDialog()
     }
 
     if (showAddToHomeDialog) {
@@ -422,59 +469,90 @@ private fun FindInPageBar(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 4.dp,
+        tonalElevation = 6.dp,
         modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
+            Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
-                    decorationBox = { inner ->
-                        if (query.isEmpty()) {
-                            Text("Find in page", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                        }
-                        inner()
-                    }
+                Icon(
+                    painter = painterResource(id = R.drawable.fx_ic_search_24),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
                 )
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(modifier = Modifier.weight(1f)) {
+                    BasicTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
+                        decorationBox = { inner ->
+                            if (query.isEmpty()) {
+                                Text("Find in page", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                            }
+                            inner()
+                        }
+                    )
+                }
+                if (query.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (total > 0) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                else MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "$current/$total",
+                            color = if (total > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_close),
+                        contentDescription = "Clear",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { onQueryChange("") }
+                    )
+                }
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (query.isBlank()) "0/0" else "$current/$total",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-            IconButton(onClick = onPrev, modifier = Modifier.size(34.dp)) {
+            Spacer(modifier = Modifier.width(4.dp))
+            IconButton(onClick = onPrev, enabled = total > 0, modifier = Modifier.size(34.dp)) {
                 Icon(
                     painter = painterResource(id = R.drawable.uh_ic_back_24),
                     contentDescription = "Previous",
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = if (total > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                     modifier = Modifier.size(18.dp)
                 )
             }
-            IconButton(onClick = onNext, modifier = Modifier.size(34.dp)) {
+            IconButton(onClick = onNext, enabled = total > 0, modifier = Modifier.size(34.dp)) {
                 Icon(
                     painter = painterResource(id = R.drawable.uh_ic_forward_24),
                     contentDescription = "Next",
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = if (total > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                     modifier = Modifier.size(18.dp)
                 )
             }

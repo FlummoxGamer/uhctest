@@ -276,7 +276,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                     color = MaterialTheme.colorScheme.onPrimary
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Optimizing...", fontSize = 13.sp)
+                                Text("Applying...", fontSize = 13.sp)
                             } else {
                                 Icon(
                                     painter = painterResource(id = R.drawable.fx_ic_check_24),

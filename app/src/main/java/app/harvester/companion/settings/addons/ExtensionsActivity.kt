@@ -111,9 +111,9 @@ class ExtensionsActivity : AppCompatActivity() {
                 val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
                 var selectedTab by remember { mutableStateOf(ExtensionsTab.Discover) }
-                var extensions by remember { mutableStateOf<List<WebExtension>>(emptyList()) }
-                var installedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-                var installingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+                val extensions by ExtensionInstallManager.installedExtensionsFlow.collectAsState()
+                val installedIds by ExtensionInstallManager.installedIdsFlow.collectAsState()
+                val installRecords by ExtensionInstallManager.recordsFlow.collectAsState()
 
                 var searchQuery by remember { mutableStateOf("") }
                 var discoverAddons by remember { mutableStateOf<List<AmoAddon>>(emptyList()) }
@@ -128,40 +128,22 @@ class ExtensionsActivity : AppCompatActivity() {
                 fun loadInstalledExtensions() {
                     val runtime = GeckoEngine.getRuntime(context) ?: return
                     UBlockOriginManager.syncInstalledState()
-                    runtime.webExtensionController.list().accept({ extList ->
-                        val filtered = extList?.filter {
-                            it.id !in BUILTIN_INTERNAL_IDS && !it.isBuiltIn
-                        } ?: emptyList()
-                        val ids = extList?.map { it.id }?.toSet() ?: emptySet()
+                    ExtensionInstallManager.refreshInstalledExtensions(runtime) { err ->
                         runOnUiThread {
-                            extensions = filtered
-                            installedIds = ids
+                            Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                         }
-                    }, {
-                        runOnUiThread {
-                            Toast.makeText(context, "Failed to load extensions", Toast.LENGTH_SHORT).show()
-                        }
-                    })
+                    }
                 }
 
-                fun installXpi(url: String, key: String, onSuccessMsg: String = "Installed") {
+                fun installXpi(url: String, key: String, displayName: String) {
                     val runtime = GeckoEngine.getRuntime(context) ?: return
-                    installingIds = installingIds + key
-                    runtime.webExtensionController.install(url).accept({ ext ->
-                        runOnUiThread {
-                            if (ext != null) {
-                                runtime.webExtensionController.setAllowedInPrivateBrowsing(ext, true)
-                            }
-                            installingIds = installingIds - key
-                            Toast.makeText(context, onSuccessMsg, Toast.LENGTH_SHORT).show()
-                            loadInstalledExtensions()
-                        }
-                    }, { err ->
-                        runOnUiThread {
-                            installingIds = installingIds - key
-                            Toast.makeText(context, "Install failed: ${err?.message ?: "Error"}", Toast.LENGTH_SHORT).show()
-                        }
-                    })
+                    ExtensionInstallManager.enqueueInstall(
+                        ctx = context,
+                        runtime = runtime,
+                        key = key,
+                        displayName = displayName,
+                        xpiUrl = url
+                    )
                 }
 
                 LaunchedEffect(Unit) {
@@ -206,7 +188,8 @@ class ExtensionsActivity : AppCompatActivity() {
                                     val trimmed = urlInput.trim()
                                     showInstallUrlDialog = false
                                     if (trimmed.isNotBlank()) {
-                                        installXpi(trimmed, key = trimmed)
+                                        val label = Uri.parse(trimmed).lastPathSegment?.ifBlank { "Add-on" } ?: "Add-on"
+                                        installXpi(trimmed, key = trimmed, displayName = label)
                                     }
                                 }
                             ) {
@@ -268,7 +251,9 @@ class ExtensionsActivity : AppCompatActivity() {
                 selectedAddonDetail?.let { addon ->
                     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
                     val isAddonInstalled = addon.guid in installedIds
-                    val isAddonInstalling = addon.guid in installingIds
+                    val record = installRecords[addon.guid]
+                    val isAddonInstalling = record != null && (record.status == ExtensionInstallManager.Status.DOWNLOADING || record.status == ExtensionInstallManager.Status.INSTALLING)
+                    val isFailed = record?.status == ExtensionInstallManager.Status.FAILED
                     ModalBottomSheet(
                         onDismissRequest = { selectedAddonDetail = null },
                         sheetState = sheetState,
@@ -376,7 +361,7 @@ class ExtensionsActivity : AppCompatActivity() {
                                 Button(
                                     onClick = {
                                         if (!isAddonInstalled && !isAddonInstalling) {
-                                            installXpi(addon.xpiUrl, key = addon.guid, onSuccessMsg = "${addon.name} installed")
+                                            installXpi(addon.xpiUrl, key = addon.guid, displayName = addon.name)
                                         }
                                     },
                                     enabled = !isAddonInstalled && !isAddonInstalling,
@@ -390,15 +375,31 @@ class ExtensionsActivity : AppCompatActivity() {
                                             color = MaterialTheme.colorScheme.onPrimary
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Installing…", fontSize = 13.sp)
+                                        val label = if (record?.status == ExtensionInstallManager.Status.DOWNLOADING && (record.progress > 0.05f)) {
+                                            "Downloading ${(record.progress * 100).toInt()}%…"
+                                        } else {
+                                            "Installing…"
+                                        }
+                                        Text(label, fontSize = 13.sp)
                                     } else {
                                         Text(
-                                            text = if (isAddonInstalled) "Installed" else "Install Extension",
+                                            text = when {
+                                                isAddonInstalled -> "Installed"
+                                                isFailed -> "Retry Install"
+                                                else -> "Install Extension"
+                                            },
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     }
                                 }
+                            }
+                            if (isFailed && !record?.errorMessage.isNullOrBlank()) {
+                                Text(
+                                    text = record!!.errorMessage!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
@@ -459,7 +460,7 @@ class ExtensionsActivity : AppCompatActivity() {
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                placeholder = { Text("Search Firefox Add-ons…", fontSize = 14.sp) },
+                                placeholder = { Text("Search add-ons…", fontSize = 14.sp) },
                                 leadingIcon = {
                                     Icon(
                                         painter = painterResource(id = R.drawable.fx_ic_search_24),
@@ -533,16 +534,19 @@ class ExtensionsActivity : AppCompatActivity() {
                                     }
                                 } else {
                                     items(discoverAddons, key = { it.guid }) { addon ->
+                                        val record = installRecords[addon.guid]
+                                        val installing = record != null && (record.status == ExtensionInstallManager.Status.DOWNLOADING || record.status == ExtensionInstallManager.Status.INSTALLING)
                                         AmoDiscoverCard(
                                             addon = addon,
                                             isInstalled = addon.guid in installedIds,
-                                            isInstalling = addon.guid in installingIds,
+                                            isInstalling = installing,
+                                            installRecord = record,
                                             onOpenDetail = { selectedAddonDetail = addon },
                                             onInstall = {
                                                 installXpi(
                                                     addon.xpiUrl,
                                                     key = addon.guid,
-                                                    onSuccessMsg = "${addon.name} installed"
+                                                    displayName = addon.name
                                                 )
                                             }
                                         )
@@ -722,19 +726,26 @@ private fun UBlockOriginShieldCard(
                 )
                 val statusSub = buildString {
                     if (state.isUpdating) {
-                        append("Updating package…")
+                        val pct = (state.progress * 100).toInt()
+                        if (pct in 1..99) append("Updating package ($pct%)…") else append("Updating package…")
+                    } else if (!state.errorMessage.isNullOrBlank()) {
+                        append(state.errorMessage)
                     } else if (state.isInstalled) {
                         append(if (state.version.isNotBlank()) "v${state.version}" else "Active")
                     } else {
-                        append("Built-in adblocker pending")
+                        append("Built-in adblocker ready")
                     }
-                    if (state.totalBlockedCount > 0) {
+                    if (state.totalBlockedCount > 0 && state.errorMessage.isNullOrBlank()) {
                         append(" · ${state.totalBlockedCount} blocked")
                     }
                 }
                 Text(
                     text = statusSub,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (!state.errorMessage.isNullOrBlank() && !state.isUpdating) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -750,7 +761,11 @@ private fun UBlockOriginShieldCard(
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                 } else {
                     Text(
-                        text = if (state.isInstalled) "Update" else "Install",
+                        text = when {
+                            !state.errorMessage.isNullOrBlank() -> "Retry"
+                            state.isInstalled -> "Update"
+                            else -> "Install"
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -770,9 +785,11 @@ private fun AmoDiscoverCard(
     addon: AmoAddon,
     isInstalled: Boolean,
     isInstalling: Boolean,
+    installRecord: ExtensionInstallManager.InstallRecord? = null,
     onOpenDetail: () -> Unit,
     onInstall: () -> Unit,
 ) {
+    val isFailed = installRecord?.status == ExtensionInstallManager.Status.FAILED
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -816,13 +833,23 @@ private fun AmoDiscoverCard(
                         }
                     }
                 }
-                Text(
-                    text = addon.summary.ifBlank { addon.author },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (isFailed && !installRecord?.errorMessage.isNullOrBlank()) {
+                    Text(
+                        text = installRecord!!.errorMessage!!,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Text(
+                        text = addon.summary.ifBlank { addon.author },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "${addon.author} · ★ ${formatRating(addon.averageRating)} · ${formatUsers(addon.weeklyUsers)} users",
@@ -843,7 +870,11 @@ private fun AmoDiscoverCard(
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                 } else {
                     Text(
-                        text = if (isInstalled) "Installed" else "Install",
+                        text = when {
+                            isInstalled -> "Installed"
+                            isFailed -> "Retry"
+                            else -> "Install"
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )

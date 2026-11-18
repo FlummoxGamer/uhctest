@@ -149,6 +149,8 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
 
             val ublockState by UBlockOriginManager.state.collectAsState()
             val trustState by store.stateFlow.collectAsState()
+            val panelStyle by app.harvester.companion.SettingsPrefs.trustPanelStyleFlow(ctx).collectAsState()
+            val privacyPreset by app.harvester.companion.SettingsPrefs.privacyLevelFlow(ctx).collectAsState()
             val websiteInfoState = trustState.websiteInfoState
             val isTrackingProtectionEnabled = trustState.isTrackingProtectionEnabled
             val websitePermissions = trustState.websitePermissionsState.values
@@ -255,7 +257,11 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
             ) {
                 Surface(
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = if (panelStyle == app.harvester.companion.SettingsPrefs.TRUST_STYLE_CYBERPUNK) {
+                        androidx.compose.ui.graphics.Color(0xFF070B12)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
                     modifier = Modifier
                         .widthIn(max = 560.dp)
                         .fillMaxWidth()
@@ -272,6 +278,20 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                                     isGlobalTrackingProtectionEnabled = true,
                                     isLocalPdf = false,
                                     numberOfTrackersBlocked = trackersBlockedCount,
+                                    panelStyle = panelStyle,
+                                    privacyPreset = privacyPreset,
+                                    onToggleStyle = {
+                                        val next = if (panelStyle == app.harvester.companion.SettingsPrefs.TRUST_STYLE_CYBERPUNK) {
+                                            app.harvester.companion.SettingsPrefs.TRUST_STYLE_ADAPTIVE
+                                        } else {
+                                            app.harvester.companion.SettingsPrefs.TRUST_STYLE_CYBERPUNK
+                                        }
+                                        app.harvester.companion.SettingsPrefs.setString(
+                                            ctx,
+                                            app.harvester.companion.SettingsPrefs.K_TRUST_PANEL_STYLE,
+                                            next
+                                        )
+                                    },
                                     ublockInstalled = ublockState.isInstalled,
                                     ublockGlobalEnabled = ublockState.isEnabled,
                                     ublockSitePaused = isUblockSitePaused,

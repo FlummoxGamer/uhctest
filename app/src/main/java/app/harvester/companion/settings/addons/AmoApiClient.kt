@@ -113,7 +113,7 @@ object AmoApiClient {
         }
 
         val authors = obj.optJSONArray("authors")
-        val author = authors?.optJSONObject(0)?.optString("name").orEmpty().ifBlank { "Mozilla Add-ons" }
+        val author = authors?.optJSONObject(0)?.optString("name").orEmpty().ifBlank { "Community Developer" }
         val ratings = obj.optJSONObject("ratings")
         val avgRating = ratings?.optDouble("average", 0.0) ?: 0.0
         val countRating = ratings?.optInt("count", 0) ?: 0

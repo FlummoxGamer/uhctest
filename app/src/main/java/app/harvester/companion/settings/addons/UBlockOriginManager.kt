@@ -9,7 +9,9 @@ import app.harvester.companion.UHLog
 import app.harvester.companion.core.network.UhHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,7 +39,9 @@ object UBlockOriginManager {
         val isUpdating: Boolean = false,
         val version: String = "",
         val pausedHosts: Set<String> = emptySet(),
-        val totalBlockedCount: Int = 0
+        val totalBlockedCount: Int = 0,
+        val progress: Float = 0f,
+        val errorMessage: String? = null
     )
 
     private val initialized = AtomicBoolean(false)
@@ -50,6 +54,8 @@ object UBlockOriginManager {
     private var geckoRuntime: GeckoRuntime? = null
     @Volatile
     private var installedExt: WebExtension? = null
+    @Volatile
+    private var updateJob: Job? = null
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
@@ -58,6 +64,7 @@ object UBlockOriginManager {
         if (!initialized.compareAndSet(false, true)) return
         appContext = ctx.applicationContext
         geckoRuntime = runtime
+        ExtensionInstallManager.ensurePromptDelegate(runtime)
 
         val enabled = SettingsPrefs.getBool(ctx, SettingsPrefs.K_UBLOCK_ENABLED, true)
         val paused = readPausedHosts(ctx)
@@ -103,6 +110,7 @@ object UBlockOriginManager {
     fun setGloballyEnabled(enabled: Boolean) {
         val ctx = appContext ?: return
         val runtime = geckoRuntime ?: return
+        ExtensionInstallManager.ensurePromptDelegate(runtime)
         SettingsPrefs.setBool(ctx, SettingsPrefs.K_UBLOCK_ENABLED, enabled)
         _state.value = _state.value.copy(isEnabled = enabled)
 
@@ -112,13 +120,17 @@ object UBlockOriginManager {
                 if (enabled) {
                     runtime.webExtensionController.enable(ext, WebExtensionController.EnableSource.USER).accept({ updated ->
                         installedExt = updated
-                        _state.value = _state.value.copy(isInstalled = true, isEnabled = true)
-                    }, {})
+                        _state.value = _state.value.copy(isInstalled = true, isEnabled = true, errorMessage = null)
+                    }, { err ->
+                        _state.value = _state.value.copy(errorMessage = err?.message)
+                    })
                 } else {
                     runtime.webExtensionController.disable(ext, WebExtensionController.EnableSource.USER).accept({ updated ->
                         installedExt = updated
-                        _state.value = _state.value.copy(isEnabled = false)
-                    }, {})
+                        _state.value = _state.value.copy(isEnabled = false, errorMessage = null)
+                    }, { err ->
+                        _state.value = _state.value.copy(errorMessage = err?.message)
+                    })
                 }
             } else if (enabled) {
                 checkAndInstallOrUpdate(force = true)
@@ -133,6 +145,7 @@ object UBlockOriginManager {
 
     fun syncInstalledState(onComplete: ((Boolean) -> Unit)? = null) {
         val runtime = geckoRuntime ?: return
+        ExtensionInstallManager.ensurePromptDelegate(runtime)
         mainHandler.post {
             runtime.webExtensionController.list().accept({ list ->
                 val found = list?.firstOrNull { it.id == UBLOCK_ID }
@@ -143,14 +156,13 @@ object UBlockOriginManager {
                     appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         ?.edit()?.putString(KEY_INSTALLED_VER, ver)?.apply()
                     if (!found.metaData.allowedInPrivateBrowsing) {
-                        mainHandler.post {
-                            runtime.webExtensionController.setAllowedInPrivateBrowsing(found, true)
-                        }
+                        runtime.webExtensionController.setAllowedInPrivateBrowsing(found, true)
                     }
                     _state.value = _state.value.copy(
                         isInstalled = true,
                         isEnabled = enabled,
-                        version = ver
+                        version = ver,
+                        errorMessage = null
                     )
                     onComplete?.invoke(true)
                 } else {
@@ -166,24 +178,46 @@ object UBlockOriginManager {
     fun checkAndInstallOrUpdate(force: Boolean = false) {
         val ctx = appContext ?: return
         val runtime = geckoRuntime ?: return
-        if (_state.value.isUpdating) return
+        if (_state.value.isUpdating && updateJob?.isActive == true) return
 
-        _state.value = _state.value.copy(isUpdating = true)
-        scope.launch {
+        ExtensionInstallManager.ensurePromptDelegate(runtime)
+        _state.value = _state.value.copy(isUpdating = true, progress = 0.05f, errorMessage = null)
+
+        updateJob = scope.launch {
+            val done = AtomicBoolean(false)
+            val watchdog = scope.launch {
+                delay(45_000L)
+                if (done.compareAndSet(false, true)) {
+                    _state.value = _state.value.copy(
+                        isUpdating = false,
+                        progress = 0f,
+                        errorMessage = "Package update timed out"
+                    )
+                }
+            }
             try {
                 val addon = AmoApiClient.fetchAddon(UBLOCK_SLUG)
                 ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
 
                 if (addon == null || addon.xpiUrl.isBlank()) {
-                    UHLog.w("ublock", "Unable to query uBlock Origin release metadata from AMO.")
-                    _state.value = _state.value.copy(isUpdating = false)
+                    if (done.compareAndSet(false, true)) {
+                        watchdog.cancel()
+                        _state.value = _state.value.copy(
+                            isUpdating = false,
+                            progress = 0f,
+                            errorMessage = "Could not reach package catalog"
+                        )
+                    }
                     return@launch
                 }
 
                 val currentVer = _state.value.version
                 if (!force && _state.value.isInstalled && currentVer == addon.version) {
-                    _state.value = _state.value.copy(isUpdating = false)
+                    if (done.compareAndSet(false, true)) {
+                        watchdog.cancel()
+                        _state.value = _state.value.copy(isUpdating = false, progress = 1f, errorMessage = null)
+                    }
                     return@launch
                 }
 
@@ -199,11 +233,30 @@ object UBlockOriginManager {
                 var downloaded = false
                 UhHttpClient.client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful && resp.body != null) {
-                        resp.body!!.byteStream().use { input ->
-                            tmpXpi.outputStream().use { out -> input.copyTo(out) }
+                        val body = resp.body!!
+                        val total = body.contentLength()
+                        var copied = 0L
+                        val buf = ByteArray(16 * 1024)
+                        body.byteStream().use { input ->
+                            tmpXpi.outputStream().use { out ->
+                                var read = input.read(buf)
+                                while (read >= 0) {
+                                    out.write(buf, 0, read)
+                                    copied += read
+                                    if (total > 0L) {
+                                        _state.value = _state.value.copy(
+                                            progress = (copied.toFloat() / total.toFloat()).coerceIn(0.1f, 0.9f)
+                                        )
+                                    }
+                                    read = input.read(buf)
+                                }
+                            }
                         }
                         if (tmpXpi.length() > 10_000L) {
-                            tmpXpi.renameTo(targetXpi)
+                            if (!tmpXpi.renameTo(targetXpi)) {
+                                tmpXpi.copyTo(targetXpi, overwrite = true)
+                                tmpXpi.delete()
+                            }
                             downloaded = true
                         }
                     }
@@ -218,56 +271,92 @@ object UBlockOriginManager {
                     addon.xpiUrl
                 }
 
+                _state.value = _state.value.copy(progress = 0.95f)
+
                 mainHandler.post {
+                    ExtensionInstallManager.ensurePromptDelegate(runtime)
                     runtime.webExtensionController.install(installSource).accept({ ext ->
-                        installedExt = ext
-                        if (ext != null) {
-                            mainHandler.post {
+                        if (done.compareAndSet(false, true)) {
+                            watchdog.cancel()
+                            installedExt = ext
+                            if (ext != null) {
                                 runtime.webExtensionController.setAllowedInPrivateBrowsing(ext, true)
-                                if (!SettingsPrefs.getBool(ctx, SettingsPrefs.K_UBLOCK_ENABLED, true)) {
+                                val prefEnabled = SettingsPrefs.getBool(ctx, SettingsPrefs.K_UBLOCK_ENABLED, true)
+                                if (!prefEnabled) {
                                     runtime.webExtensionController.disable(ext, WebExtensionController.EnableSource.USER)
                                 }
+                                val ver = ext.metaData.version.ifBlank { addon.version }
+                                ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                                    .edit().putString(KEY_INSTALLED_VER, ver).apply()
+                                _state.value = _state.value.copy(
+                                    isInstalled = true,
+                                    isEnabled = prefEnabled,
+                                    isUpdating = false,
+                                    version = ver,
+                                    progress = 1f,
+                                    errorMessage = null
+                                )
+                                ExtensionInstallManager.refreshInstalledExtensions(runtime)
+                                UHLog.d("ublock", "uBlock Origin ready (v$ver)")
+                            } else {
+                                _state.value = _state.value.copy(
+                                    isUpdating = false,
+                                    progress = 0f,
+                                    errorMessage = "Installation returned null"
+                                )
                             }
-                            val ver = ext.metaData.version.ifBlank { addon.version }
-                            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                                .edit().putString(KEY_INSTALLED_VER, ver).apply()
-                            _state.value = _state.value.copy(
-                                isInstalled = true,
-                                isUpdating = false,
-                                version = ver
-                            )
-                            UHLog.d("ublock", "uBlock Origin ready (v$ver)")
-                        } else {
-                            _state.value = _state.value.copy(isUpdating = false)
                         }
                     }, { err ->
                         UHLog.w("ublock", "Local file install fallback/error: ${err?.message}")
                         if (installSource != addon.xpiUrl) {
                             mainHandler.post {
                                 runtime.webExtensionController.install(addon.xpiUrl).accept({ ext ->
-                                    installedExt = ext
-                                    if (ext != null) {
-                                        mainHandler.post {
+                                    if (done.compareAndSet(false, true)) {
+                                        watchdog.cancel()
+                                        installedExt = ext
+                                        if (ext != null) {
                                             runtime.webExtensionController.setAllowedInPrivateBrowsing(ext, true)
                                         }
+                                        _state.value = _state.value.copy(
+                                            isInstalled = ext != null,
+                                            isUpdating = false,
+                                            version = ext?.metaData?.version ?: addon.version,
+                                            progress = if (ext != null) 1f else 0f,
+                                            errorMessage = if (ext == null) "Install failed" else null
+                                        )
+                                        ExtensionInstallManager.refreshInstalledExtensions(runtime)
                                     }
-                                    _state.value = _state.value.copy(
-                                        isInstalled = ext != null,
-                                        isUpdating = false,
-                                        version = ext?.metaData?.version ?: addon.version
-                                    )
-                                }, {
-                                    _state.value = _state.value.copy(isUpdating = false)
+                                }, { err2 ->
+                                    if (done.compareAndSet(false, true)) {
+                                        watchdog.cancel()
+                                        _state.value = _state.value.copy(
+                                            isUpdating = false,
+                                            progress = 0f,
+                                            errorMessage = err2?.message ?: err?.message ?: "Install failed"
+                                        )
+                                    }
                                 })
                             }
-                        } else {
-                            _state.value = _state.value.copy(isUpdating = false)
+                        } else if (done.compareAndSet(false, true)) {
+                            watchdog.cancel()
+                            _state.value = _state.value.copy(
+                                isUpdating = false,
+                                progress = 0f,
+                                errorMessage = err?.message ?: "Install failed"
+                            )
                         }
                     })
                 }
             } catch (e: Exception) {
                 UHLog.w("ublock", "uBlock Origin auto-install failed: ${e.message}")
-                _state.value = _state.value.copy(isUpdating = false)
+                if (done.compareAndSet(false, true)) {
+                    watchdog.cancel()
+                    _state.value = _state.value.copy(
+                        isUpdating = false,
+                        progress = 0f,
+                        errorMessage = e.message ?: "Update failed"
+                    )
+                }
             }
         }
     }

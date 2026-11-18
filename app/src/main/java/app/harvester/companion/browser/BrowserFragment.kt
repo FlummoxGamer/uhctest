@@ -220,6 +220,7 @@ class BrowserFragment : Fragment() {
         }
 
         setupLogging(components)
+        applyBrowserSurfaceTheme()
         ViewCompat.setOnApplyWindowInsetsListener(binding.browserLayout) { v, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.statusBars() or
@@ -228,7 +229,7 @@ class BrowserFragment : Fragment() {
             )
             val density = v.resources.displayMetrics.density
             val isLandscape = v.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-            val toolbarClearancePx = ((if (isLandscape) 52f else 62f) * density).toInt()
+            val toolbarClearancePx = ((if (isLandscape) 50f else 58f) * density).toInt()
             val isBottom = viewModel.isBarBottom.value
             val topPadding = bars.top + if (!isBottom) toolbarClearancePx else 0
             val bottomPadding = bars.bottom + if (isBottom) toolbarClearancePx else 0
@@ -268,11 +269,44 @@ class BrowserFragment : Fragment() {
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.isBarBottom.collect {
-                    ViewCompat.requestApplyInsets(binding.browserLayout)
+                launch {
+                    viewModel.isBarBottom.collect {
+                        ViewCompat.requestApplyInsets(binding.browserLayout)
+                    }
+                }
+                launch {
+                    app.harvester.companion.ThemePrefs.modeFlow(context.applicationContext).collect {
+                        applyBrowserSurfaceTheme()
+                    }
+                }
+                launch {
+                    SettingsPrefs.amoledDarkFlow(context.applicationContext).collect {
+                        applyBrowserSurfaceTheme()
+                    }
                 }
             }
         }
+    }
+
+    private fun applyBrowserSurfaceTheme() {
+        val b = _binding ?: return
+        val ctx = context ?: return
+        val isDark = app.harvester.companion.ThemePrefs.isDark(ctx)
+        val amoled = app.harvester.companion.ThemePrefs.isAmoledActive(ctx)
+        val bgColor = when {
+            isDark && amoled -> android.graphics.Color.BLACK
+            isDark -> android.graphics.Color.parseColor("#0B0F17")
+            else -> android.graphics.Color.WHITE
+        }
+        val surface2 = when {
+            isDark && amoled -> android.graphics.Color.parseColor("#12161F")
+            isDark -> android.graphics.Color.parseColor("#1E2532")
+            else -> android.graphics.Color.parseColor("#E9EDF2")
+        }
+        b.root.setBackgroundColor(bgColor)
+        b.browserLayout.setBackgroundColor(bgColor)
+        b.swipeRefresh.setBackgroundColor(bgColor)
+        b.swipeRefresh.setProgressBackgroundColorSchemeColor(surface2)
     }
 
     private fun setupFeatures(components: app.harvester.companion.components.Components, engineView: mozilla.components.concept.engine.EngineView) {
@@ -425,25 +459,10 @@ class BrowserFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        val preview = app.harvester.companion.browser.tabs.TabPreviewCache.getLastActiveBitmap()
-        if (preview != null && !preview.isRecycled && _binding != null) {
-            binding.tabPreviewOverlay.setImageBitmap(preview)
-            binding.tabPreviewOverlay.visibility = View.VISIBLE
-            binding.tabPreviewOverlay.alpha = 1f
-            binding.tabPreviewOverlay.postDelayed({
-                if (_binding != null) {
-                    binding.tabPreviewOverlay.animate()
-                        .alpha(0f)
-                        .setDuration(250)
-                        .withEndAction {
-                            if (_binding != null) {
-                                binding.tabPreviewOverlay.visibility = View.GONE
-                                binding.tabPreviewOverlay.alpha = 1f
-                            }
-                        }
-                        .start()
-                }
-            }, 450)
+        if (_binding != null) {
+            binding.tabPreviewOverlay.visibility = View.GONE
+            binding.tabPreviewOverlay.setImageDrawable(null)
+            applyBrowserSurfaceTheme()
         }
     }
 
