@@ -1,8 +1,0 @@
-.gradle/
-build/
-**/build/
-.local/
-
-server.js
-package.json
-node_modules/
