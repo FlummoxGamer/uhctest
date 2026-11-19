@@ -1,6 +1,7 @@
 package app.harvester.companion.core.network
 
 import okhttp3.ConnectionPool
+import okhttp3.ConnectionSpec
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -17,6 +18,14 @@ object UhHttpClient {
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    val secureClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS))
+            .followRedirects(false)
+            .followSslRedirects(true)
             .build()
     }
 }

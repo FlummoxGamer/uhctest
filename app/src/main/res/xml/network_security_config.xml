@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Preserve general HTTP browsing inside GeckoView like mainstream browsers -->
+    <base-config cleartextTrafficPermitted="true" />
+
+    <!-- Enforce HTTPS-only on app-owned update, GitHub, and extension API endpoints -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">raw.githubusercontent.com</domain>
+        <domain includeSubdomains="true">gh-proxy.com</domain>
+        <domain includeSubdomains="true">addons.mozilla.org</domain>
+        <domain includeSubdomains="true">services.addons.mozilla.org</domain>
+    </domain-config>
+</network-security-config>

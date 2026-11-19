@@ -1,7 +1,9 @@
 package app.harvester.companion
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -22,15 +24,35 @@ import androidx.navigation.fragment.NavHostFragment
 import app.harvester.companion.browser.BrowserFragment
 import app.harvester.companion.browser.BrowserViewModel
 import app.harvester.companion.browser.toolbar.UhGlobalToolbar
+import app.harvester.companion.safemode.SafeModeActivity
 import app.harvester.companion.theme.UHTheme
+import app.harvester.companion.utils.CrashChecker
+import java.io.File
 
 class HomeActivity : AppCompatActivity() {
 
     private val browserViewModel: BrowserViewModel by viewModels()
     private var navControllerState by mutableStateOf<NavController?>(null)
+    private var pendingIntent: Intent? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= 30) {
+            CrashChecker.checkNativeCrashes(this)
+        }
+        if (File(filesDir, "safe_mode.flag").exists()) {
+            startActivity(
+                Intent(this, SafeModeActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                }
+            )
+            finish()
+            return
+        }
+
+        pendingIntent = intent
+
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
@@ -54,31 +76,17 @@ class HomeActivity : AppCompatActivity() {
                         factory = { context ->
                             FragmentContainerView(context).apply {
                                 id = R.id.nav_host_fragment
+                                addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                                    override fun onViewAttachedToWindow(v: View) {
+                                        v.removeOnAttachStateChangeListener(this)
+                                        ensureNavHostAttached()
+                                    }
+
+                                    override fun onViewDetachedFromWindow(v: View) = Unit
+                                })
                             }
                         },
-                        modifier = Modifier.fillMaxSize(),
-                        update = {
-                            try {
-                                val existing = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
-                                val host = if (existing == null) {
-                                    val created = NavHostFragment.create(R.navigation.nav_graph)
-                                    supportFragmentManager.beginTransaction()
-                                        .replace(R.id.nav_host_fragment, created)
-                                        .setPrimaryNavigationFragment(created)
-                                        .commitNow()
-                                    created
-                                } else {
-                                    existing
-                                }
-                                val navCtrl = host.navController
-                                if (navControllerState !== navCtrl) {
-                                    navControllerState = navCtrl
-                                    handleIntent(intent, navCtrl)
-                                }
-                            } catch (e: Exception) {
-                                UHLog.throwable("ui_error", "Failed to initialize NavHostFragment/NavController", e)
-                            }
-                        }
+                        modifier = Modifier.fillMaxSize()
                     )
 
                     if (controller != null) {
@@ -134,6 +142,32 @@ class HomeActivity : AppCompatActivity() {
         })
     }
 
+    private fun ensureNavHostAttached() {
+        if (isFinishing || isDestroyed || supportFragmentManager.isStateSaved) return
+        try {
+            val existing = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+            val host = if (existing == null) {
+                val created = NavHostFragment.create(R.navigation.nav_graph)
+                supportFragmentManager.beginTransaction()
+                    .replace(R.id.nav_host_fragment, created)
+                    .setPrimaryNavigationFragment(created)
+                    .commitNow()
+                created
+            } else {
+                existing
+            }
+            val navCtrl = host.navController
+            if (navControllerState !== navCtrl) {
+                navControllerState = navCtrl
+                val queued = pendingIntent
+                pendingIntent = null
+                handleIntent(queued ?: intent, navCtrl)
+            }
+        } catch (e: Exception) {
+            UHLog.throwable("ui_error", "Failed to initialize NavHostFragment/NavController", e)
+        }
+    }
+
     fun navigateFromMenu(destinationId: Int) {
         window?.decorView?.post {
             val controller = navControllerState
@@ -158,7 +192,7 @@ class HomeActivity : AppCompatActivity() {
             return
         }
         if (controller == null) {
-            UHLog.w("ui_warn", "Cannot handle intent URL before NavController is ready: $url")
+            pendingIntent = intent
             return
         }
         try {
@@ -175,6 +209,9 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (navControllerState == null) {
+            ensureNavHostAttached()
+        }
         (application as? UHApp)?.components?.resumePendingNetworkDownloads()
     }
 

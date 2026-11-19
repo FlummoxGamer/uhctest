@@ -35,16 +35,22 @@ class UHApp : Application(), coil.ImageLoaderFactory {
     override fun onCreate() {
         val start = System.currentTimeMillis()
         super.onCreate()
-    
-        if (File(filesDir, "safe_mode.flag").exists() || applicationContext.packageName != Application.getProcessName()) {
+
+        if (applicationContext.packageName != Application.getProcessName()) {
             return
         }
 
         UHLog.init(this)
-        SessionRecorder.init(this)
         ThemePrefs.applyCurrent(this)
-        components.store.dispatch(mozilla.components.browser.state.action.DownloadAction.RestoreDownloadsStateAction)
         movePendingCrashFile()
+
+        if (File(filesDir, "safe_mode.flag").exists()) {
+            UHLog.w("safe_mode", "Pending safe_mode.flag detected; deferring browser engine startup.")
+            return
+        }
+
+        SessionRecorder.init(this)
+        components.store.dispatch(mozilla.components.browser.state.action.DownloadAction.RestoreDownloadsStateAction)
 
         applicationScope.launch {
             try {
@@ -93,7 +99,7 @@ class UHApp : Application(), coil.ImageLoaderFactory {
             params.setAppVersion(BuildConfig.VERSION_NAME)
             params.setLogDir("${context.filesDir.absolutePath}/crashes")
 
-            val callback = ICrashCallback { logPath, emergency ->
+            val crashCallback = ICrashCallback { logPath, emergency ->
                 try {
                     val crashFile = File(context.filesDir, "last_crash.txt")
                     val content = if (!logPath.isNullOrBlank() && File(logPath).exists()) {
@@ -106,9 +112,21 @@ class UHApp : Application(), coil.ImageLoaderFactory {
                 } catch (_: Exception) {}
             }
 
-            params.setJavaCallback(callback)
-            params.setNativeCallback(callback)
-            params.setAnrCallback(callback)
+            val anrCallback = ICrashCallback { logPath, emergency ->
+                try {
+                    val crashDir = File(context.filesDir, "crashes").apply { mkdirs() }
+                    val content = if (!logPath.isNullOrBlank() && File(logPath).exists()) {
+                        File(logPath).readText()
+                    } else {
+                        emergency ?: "ANR detected"
+                    }
+                    File(crashDir, "anr_${System.currentTimeMillis()}.txt").writeText(content)
+                } catch (_: Exception) {}
+            }
+
+            params.setJavaCallback(crashCallback)
+            params.setNativeCallback(crashCallback)
+            params.setAnrCallback(anrCallback)
 
             XCrash.init(context, params)
         } catch (_: Throwable) {}

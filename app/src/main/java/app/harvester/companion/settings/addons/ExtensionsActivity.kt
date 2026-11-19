@@ -73,9 +73,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
-import app.harvester.companion.GeckoEngine
 import app.harvester.companion.HomeActivity
 import app.harvester.companion.R
+import app.harvester.companion.UHApp
 import app.harvester.companion.settings.components.UhSettingsScaffold
 import app.harvester.companion.theme.UHTheme
 import coil.compose.AsyncImage
@@ -126,7 +126,7 @@ class ExtensionsActivity : AppCompatActivity() {
                 val ublockState by UBlockOriginManager.state.collectAsState()
 
                 fun loadInstalledExtensions() {
-                    val runtime = GeckoEngine.getRuntime(context) ?: return
+                    val runtime = (context.applicationContext as? UHApp)?.components?.runtime ?: return
                     UBlockOriginManager.syncInstalledState()
                     ExtensionInstallManager.refreshInstalledExtensions(runtime) { err ->
                         runOnUiThread {
@@ -136,7 +136,7 @@ class ExtensionsActivity : AppCompatActivity() {
                 }
 
                 fun installXpi(url: String, key: String, displayName: String) {
-                    val runtime = GeckoEngine.getRuntime(context) ?: return
+                    val runtime = (context.applicationContext as? UHApp)?.components?.runtime ?: return
                     ExtensionInstallManager.enqueueInstall(
                         ctx = context,
                         runtime = runtime,
@@ -222,7 +222,7 @@ class ExtensionsActivity : AppCompatActivity() {
                             TextButton(
                                 onClick = {
                                     confirmUninstall = null
-                                    val runtime = GeckoEngine.getRuntime(context) ?: return@TextButton
+                                    val runtime = (context.applicationContext as? UHApp)?.components?.runtime ?: return@TextButton
                                     runtime.webExtensionController.uninstall(ext).accept({
                                         runOnUiThread {
                                             Toast.makeText(context, "Uninstalled", Toast.LENGTH_SHORT).show()
@@ -609,7 +609,7 @@ class ExtensionsActivity : AppCompatActivity() {
                                             ext = ext,
                                             enabled = enabled,
                                             onToggleEnabled = { nextEnabled ->
-                                                val runtime = GeckoEngine.getRuntime(context) ?: return@InstalledExtensionCard
+                                                val runtime = (context.applicationContext as? UHApp)?.components?.runtime ?: return@InstalledExtensionCard
                                                 val task = if (nextEnabled) {
                                                     runtime.webExtensionController.enable(
                                                         ext,

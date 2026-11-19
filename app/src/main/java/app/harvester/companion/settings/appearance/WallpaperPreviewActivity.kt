@@ -1,13 +1,10 @@
 package app.harvester.companion.settings.appearance
 
 import android.content.res.Configuration
-import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
-import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
-import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
@@ -78,21 +75,17 @@ import androidx.palette.graphics.Palette
 import app.harvester.companion.R
 import app.harvester.companion.Shortcut
 import app.harvester.companion.ShortcutStore
-import app.harvester.companion.TouchImageView
 import app.harvester.companion.UHBrand
 import app.harvester.companion.UHLog
 import app.harvester.companion.WallpaperStore
 import app.harvester.companion.home.ShortcutIcon
 import app.harvester.companion.theme.UHTheme
-import coil.load
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class WallpaperPreviewActivity : AppCompatActivity() {
-
-    private val touchViews = mutableMapOf<Int, TouchImageView>()
 
     @OptIn(ExperimentalFoundationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -134,6 +127,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                 val shortcuts = remember { ShortcutStore.list(context).take(8) }
                 val pagerState = rememberPagerState(initialPage = initialIndex) { uris.size }
                 val previewTextColors = remember { mutableStateMapOf<Int, Int>() }
+                val transformStates = remember { mutableStateMapOf<Int, WallpaperTransformState>() }
                 var isApplying by remember { mutableIntStateOf(0) }
 
                 Box(
@@ -148,6 +142,9 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                         val item = uris[page]
                         val isVideo = WallpaperStore.isVideoFileOrUrl(item) || (forceVideo && page == initialIndex)
                         val titleColorInt = previewTextColors[page] ?: AndroidColor.WHITE
+                        val transformState = remember(page, item) {
+                            transformStates.getOrPut(page) { WallpaperTransformState() }
+                        }
 
                         WallpaperPreviewPage(
                             item = item,
@@ -155,8 +152,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                             isLandscape = isLandscape,
                             shortcuts = shortcuts,
                             titleColorInt = titleColorInt,
-                            onBindTouchView = { tv -> touchViews[page] = tv },
-                            onUnbindTouchView = { touchViews.remove(page) },
+                            transformState = transformState,
                             onDetectedTextColor = { detected -> previewTextColors[page] = detected }
                         )
                     }
@@ -196,14 +192,14 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                     return@Button
                                 }
 
-                                val touchView = touchViews[currentPage]
-                                if (touchView != null) {
+                                val transform = transformStates[currentPage]?.toNormalizedTriple()
+                                if (transform != null) {
                                     WallpaperStore.setWallpaperTransform(
                                         context,
                                         isLandscape,
-                                        touchView.currentZoom,
-                                        touchView.scrollPosition.x,
-                                        touchView.scrollPosition.y
+                                        transform.first,
+                                        transform.second,
+                                        transform.third
                                     )
                                 }
 
@@ -302,8 +298,7 @@ private fun WallpaperPreviewPage(
     isLandscape: Boolean,
     shortcuts: List<Shortcut>,
     titleColorInt: Int,
-    onBindTouchView: (TouchImageView) -> Unit,
-    onUnbindTouchView: () -> Unit,
+    transformState: WallpaperTransformState,
     onDetectedTextColor: (Int) -> Unit,
 ) {
     val context = LocalContext.current
@@ -359,37 +354,10 @@ private fun WallpaperPreviewPage(
             }
             else -> {
                 val imageModel: Any = if (item.startsWith("http")) item else File(item)
-                DisposableEffect(item) {
-                    onDispose { onUnbindTouchView() }
-                }
-                AndroidView(
-                    factory = { ctx ->
-                        TouchImageView(ctx).apply {
-                            scaleType = ImageView.ScaleType.CENTER_CROP
-                            onBindTouchView(this)
-                        }
-                    },
-                    update = { view ->
-                        onBindTouchView(view)
-                        view.load(imageModel) {
-                            crossfade(true)
-                            allowHardware(false)
-                            listener(
-                                onSuccess = { _, result ->
-                                    val bmp = (result.drawable as? BitmapDrawable)?.bitmap
-                                    if (bmp != null) {
-                                        val palette = Palette.from(bmp).generate()
-                                        val dom = palette.getDominantColor(AndroidColor.DKGRAY)
-                                        val lum = ColorUtils.calculateLuminance(dom)
-                                        onDetectedTextColor(if (lum > 0.5) AndroidColor.BLACK else AndroidColor.WHITE)
-                                    }
-                                },
-                                onError = { _, result ->
-                                    UHLog.e("preview", "Coil error: ${result.throwable.message}")
-                                }
-                            )
-                        }
-                    },
+                ZoomableWallpaperImage(
+                    imageModel = imageModel,
+                    transformState = transformState,
+                    onDetectedTextColor = onDetectedTextColor,
                     modifier = Modifier.fillMaxSize()
                 )
             }
