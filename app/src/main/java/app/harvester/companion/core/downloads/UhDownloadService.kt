@@ -99,22 +99,16 @@ class UhDownloadService : AbstractFetchDownloadService() {
     }
 
     private fun notificationIdFor(download: DownloadState): Int {
-        val id = download.notificationId
-        return if (id != null && id != 0 && id != UhDownloadNotification.NOTIFICATION_DOWNLOAD_GROUP_ID) {
-            id
-        } else {
+        val id = download.notificationId ?: download.id.hashCode()
+        return if (id == 0 || id == UhDownloadNotification.NOTIFICATION_DOWNLOAD_GROUP_ID) {
             (download.id.hashCode() and 0x7fffffff).coerceAtLeast(1000)
+        } else {
+            id
         }
     }
 
     private fun postNotification(download: DownloadState, isForeground: Boolean) {
         val notifId = notificationIdFor(download)
-        val legacyFallbackId = (download.id.hashCode() and 0x7fffffff).coerceAtLeast(1000)
-        if (legacyFallbackId != notifId) {
-            try {
-                getSystemService(android.app.NotificationManager::class.java)?.cancel(legacyFallbackId)
-            } catch (_: Exception) {}
-        }
         val notification = when (download.status) {
             DownloadState.Status.DOWNLOADING, DownloadState.Status.INITIATED -> {
                 UhDownloadNotification.createOngoingDownloadNotification(

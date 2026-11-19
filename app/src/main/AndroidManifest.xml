@@ -37,7 +37,7 @@
         <activity
             android:name=".HomeActivity"
             android:exported="true"
-            android:theme="@style/Theme.UHCompanion"
+            android:theme="@style/Theme.UHCompanion.Launch"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTop">
@@ -77,8 +77,6 @@
         <activity android:name=".settings.video.VideoOptionsActivity" android:exported="false" android:label="Video Options" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
         <activity android:name=".settings.privacy.PrivacyGuardActivity" android:exported="false" android:label="Privacy Guard" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
         <activity android:name=".settings.privacy.AdvancedActivity" android:exported="false" android:label="Advanced" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
-        <activity android:name=".settings.privacy.SiteSettingsActivity" android:exported="false" android:label="Site Settings" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
-        <activity android:name=".settings.UpdaterActivity" android:exported="false" android:label="App Updater" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
         <activity android:name=".settings.data.ManageDataActivity" android:exported="false" android:label="Manage Data" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
         <activity android:name=".settings.addons.ExtensionsActivity" android:exported="false" android:label="Extensions" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />
         <activity android:name=".settings.addons.ScriptsActivity" android:exported="false" android:label="Scripts" android:configChanges="orientation|screenSize|keyboardHidden|uiMode" android:theme="@style/Theme.UHCompanion" />

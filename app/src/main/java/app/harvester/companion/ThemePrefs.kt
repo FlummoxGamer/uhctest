@@ -36,39 +36,16 @@ object ThemePrefs {
         else -> (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     }
 
-    fun isDarkActive(ctx: Context): Boolean = isDark(ctx)
-
-    fun isAmoledActive(ctx: Context, mode: Int = getMode(ctx)): Boolean {
-        return isDark(ctx, mode) && SettingsPrefs.getBool(ctx, SettingsPrefs.K_AMOLED_DARK, false)
-    }
-
-    fun isEnhanceDarkActive(ctx: Context, mode: Int = getMode(ctx)): Boolean {
-        return isDark(ctx, mode) && SettingsPrefs.getBool(ctx, SettingsPrefs.K_ENHANCE_DARK, false)
-    }
-
     fun setMode(ctx: Context, mode: Int) {
         prefs(ctx).edit().putInt(KEY_MODE, mode).apply()
         _modeFlow.value = mode
         syncEngineColorScheme(ctx, mode)
-        syncWebAppearance(ctx)
     }
 
     fun applyCurrent(ctx: Context) {
         val mode = getMode(ctx)
         _modeFlow.value = mode
         syncEngineColorScheme(ctx, mode)
-    }
-
-    fun syncWebAppearance(ctx: Context) {
-        try {
-            val isDark = isDark(ctx)
-            val enhanceDark = isDark && SettingsPrefs.getBool(ctx, SettingsPrefs.K_ENHANCE_DARK, false)
-            val textScale = SettingsPrefs.getInt(ctx, SettingsPrefs.K_TEXT_SCALE, 100)
-            GeckoWebExtensionBridge.pushAppearanceUpdate(
-                enhanceDark = enhanceDark,
-                textScale = textScale
-            )
-        } catch (_: Exception) {}
     }
 
     private fun syncEngineColorScheme(ctx: Context, mode: Int) {

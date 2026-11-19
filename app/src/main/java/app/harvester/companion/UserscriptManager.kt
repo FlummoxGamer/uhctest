@@ -65,40 +65,10 @@ object UserscriptManager {
         return try { parse(name, f.readText(), f.length()) } catch (_: Exception) { null }
     }
 
-    fun effectivePatterns(ctx: Context, s: Script): List<String> {
-        val perms = UserscriptStore.getPermissions(ctx, s.name)
-        return if (perms.overrideMatches.isNotEmpty()) perms.overrideMatches else s.patterns
-    }
-
-    fun effectiveExcludes(ctx: Context, s: Script): List<String> {
-        val perms = UserscriptStore.getPermissions(ctx, s.name)
-        return s.excludes + perms.overrideExcludes
-    }
-
-    fun cspBypassPatterns(ctx: Context): List<String> {
-        return loadScripts(ctx)
-            .filter { UserscriptStore.isEnabled(ctx, it.name) && UserscriptStore.getPermissions(ctx, it.name).bypassCsp }
-            .flatMap { effectivePatterns(ctx, it) }
-            .distinct()
-    }
-
-    fun isConnectAllowed(ctx: Context, scriptName: String, targetUrl: String): Boolean {
-        val perms = UserscriptStore.getPermissions(ctx, scriptName)
-        if (perms.allowAllConnect || perms.allowAllGrants) return true
-        val script = loadScript(ctx, scriptName) ?: return true
-        if (script.connects.isEmpty() || "*" in script.connects) return true
-        val targetHost = try { Uri.parse(targetUrl).host?.lowercase().orEmpty() } catch (_: Exception) { "" }
-        if (targetHost.isBlank()) return false
-        return script.connects.any { raw ->
-            val rule = raw.trim().lowercase()
-            rule == "*" || targetHost == rule || targetHost.endsWith(".$rule")
-        }
-    }
-
     fun matchingScripts(ctx: Context, url: String): List<Script> {
         if (isBadUrl(url)) return emptyList()
         return loadScripts(ctx).filter { s ->
-            matchesPatterns(effectivePatterns(ctx, s), url) && !matchesPatterns(effectiveExcludes(ctx, s), url)
+            matchesPatterns(s.patterns, url) && !matchesPatterns(s.excludes, url)
         }
     }
 
@@ -201,7 +171,6 @@ object UserscriptManager {
                 prefetchResources(ctx, parsed)
             } catch (_: Exception) {}
             UserscriptStore.markDirty(ctx)
-            GeckoWebExtensionBridge.pushCspBypassConfig()
             true
         } catch (_: Exception) {
             false
@@ -343,7 +312,6 @@ object UserscriptManager {
             File(File(ctx.filesDir, "scripts"), "$name.js").delete().also {
                 UserscriptStore.forget(ctx, name)
                 MenuCommandStore.clearScript(name)
-                GeckoWebExtensionBridge.pushCspBypassConfig()
             }
         } catch (_: Exception) {
             false
@@ -394,8 +362,7 @@ object UserscriptManager {
         if (isBadUrl(url)) return out
 
         val matched = matchingScripts(ctx, url).filter {
-            val perms = UserscriptStore.getPermissions(ctx, it.name)
-            UserscriptStore.isEnabled(ctx, it.name) && (!it.noFrames || perms.allFrames || isTopFrame)
+            UserscriptStore.isEnabled(ctx, it.name) && (!it.noFrames || isTopFrame)
         }
 
         val bootSb = StringBuilder()
@@ -762,15 +729,11 @@ object UserscriptManager {
 """
 
     private fun buildWrapper(ctx: Context, script: Script): String {
-        val perms = UserscriptStore.getPermissions(ctx, script.name)
-        val cacheKey = "${script.name}:${perms.hashCode()}"
-        wrapperCache[cacheKey]?.let { return it }
-        val effPats = if (perms.overrideMatches.isNotEmpty()) perms.overrideMatches else script.patterns
-        val effExcl = script.excludes + perms.overrideExcludes
-        val patsJson = effPats.joinToString(",") {
+        wrapperCache[script.name]?.let { return it }
+        val patsJson = script.patterns.joinToString(",") {
             "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
         }
-        val exclJson = effExcl.joinToString(",") {
+        val exclJson = script.excludes.joinToString(",") {
             "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
         }
         val metaJson = buildScriptMetaJson(script)
@@ -812,7 +775,7 @@ object UserscriptManager {
             append("var GM_getResourceURL=__bundle.wrap.GM_getResourceURL;\n")
             append("var GM_log=__bundle.wrap.GM_log;\n")
             append("var unsafeWindow=window;\n")
-            append("var GM_info={script:__s,scriptHandler:'UH Userscripts',version:'2.49.0',platform:{browserName:'UH',browserVersion:'154',os:'Android',osVersion:'14',arch:'arm64'}};\n")
+            append("var GM_info={script:__s,scriptHandler:'Violentmonkey',version:'2.49.0',platform:{browserName:'Firefox',browserVersion:'154',os:'Android',osVersion:'14',arch:'arm64'}};\n")
             append("var GM=__bundle.async;try{GM.info=GM_info;}catch(e){}\n")
             append("try{\n")
         }
@@ -825,7 +788,7 @@ object UserscriptManager {
 
         val requirePrelude = loadCachedRequires(ctx, script)
         val result = preamble + "\n" + requirePrelude + "\n" + script.body + "\n" + postamble
-        wrapperCache[cacheKey] = result
+        wrapperCache[script.name] = result
         return result
     }
 

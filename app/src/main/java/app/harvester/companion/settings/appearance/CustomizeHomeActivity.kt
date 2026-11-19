@@ -181,7 +181,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                                             }
                                         )
                                     } else {
-                                        Toast.makeText(context, "Failed to load wallpaper", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Failed to optimize wallpaper", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
@@ -193,14 +193,14 @@ class CustomizeHomeActivity : AppCompatActivity() {
                     AlertDialog(
                         onDismissRequest = {},
                         confirmButton = {},
-                        title = { Text("Preparing Wallpaper", color = MaterialTheme.colorScheme.onSurface) },
+                        title = { Text("Optimizing Image", color = MaterialTheme.colorScheme.onSurface) },
                         text = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                Text("Importing full resolution image...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Converting to crisp WebP...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         },
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,

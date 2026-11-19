@@ -120,50 +120,30 @@ object WallpaperStore {
                 w = max(w, bounds.width())
                 h = max(h, bounds.height())
             }
-            val rawMax = max(w, h).coerceAtLeast(1080)
-            (rawMax / 2) * 2
+            val rawMax = max(w, h)
+            val capped = rawMax.coerceIn(1080, 2560)
+            (capped / 2) * 2
         } catch (_: Exception) {
-            2400
+            1920
         }
     }
 
     @Suppress("DEPRECATION")
-    private fun losslessWebpFormat(): Bitmap.CompressFormat =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSLESS
-        else Bitmap.CompressFormat.PNG
-
-    fun isMp4File(file: File): Boolean {
-        if (!file.exists() || file.length() < 12L) return false
-        return try {
-            val header = ByteArray(12)
-            val count = file.inputStream().use { it.read(header) }
-            if (count < 12) return false
-            // ISO BMFF MP4/M4V/3GP ('ftyp' at offset 4)
-            header[4] == 'f'.code.toByte() &&
-                header[5] == 't'.code.toByte() &&
-                header[6] == 'y'.code.toByte() &&
-                header[7] == 'p'.code.toByte()
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun webpFormat(): Bitmap.CompressFormat =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSY
+        else Bitmap.CompressFormat.WEBP
 
     fun saveWallpaper(ctx: Context, uri: Uri): String? {
         return try {
-            val ext = guessImageExtensionFromUri(ctx, uri)
-            val tempFile = File(ctx.cacheDir, "wp_src_${System.currentTimeMillis()}.$ext")
+            val tempFile = File(ctx.cacheDir, "wp_src_${System.currentTimeMillis()}")
             ctx.contentResolver.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { output -> input.copyTo(output) }
             } ?: return null
 
-            val destExt = if (ext in setOf("png", "webp", "jpg", "jpeg")) ext else "png"
-            val destFile = File(getWallpaperDir(ctx), "wall_${System.currentTimeMillis()}.$destExt")
-            val ok = preserveHighQualityImage(ctx, tempFile, destFile, destExt)
+            val destFile = File(getWallpaperDir(ctx), "wall_${System.currentTimeMillis()}.webp")
+            val ok = normalizeImageToWebp(ctx, tempFile, destFile)
             tempFile.delete()
-            if (!ok) {
-                destFile.delete()
-                return null
-            }
+            if (!ok) return null
 
             dedupeWallpapers(ctx, destFile, "wall_")
             cleanOldWallpapers(ctx)
@@ -182,13 +162,7 @@ object WallpaperStore {
                 rawInput.outputStream().use { output -> input.copyTo(output) }
             } ?: return null
             val destFile = File(getWallpaperDir(ctx), "motion_${System.currentTimeMillis()}.mp4")
-            // Already MP4? Skip FFmpeg completely — instant direct file move/copy at 100% original quality.
-            val ok = if (isMp4File(rawInput)) {
-                rawInput.copyTo(destFile, overwrite = true)
-                destFile.exists() && destFile.length() > 0L
-            } else {
-                transcodeToDeviceH264Mp4(ctx, rawInput, destFile)
-            }
+            val ok = transcodeToDeviceH264Mp4(ctx, rawInput, destFile)
             rawInput.delete()
             if (!ok) {
                 destFile.delete()
@@ -227,10 +201,9 @@ object WallpaperStore {
                 ensureVideoPoster(existingVideo.absolutePath)
                 return existingVideo.absolutePath
             }
-            dir.listFiles { f ->
-                f.isFile && f.name.startsWith("wall_$hash.") && f.length() > 512L
-            }?.firstOrNull()?.let { existingImg ->
-                return existingImg.absolutePath
+            val existingImage = File(dir, "wall_$hash.webp")
+            if (existingImage.exists() && existingImage.length() > 512L) {
+                return existingImage.absolutePath
             }
 
             val request = Request.Builder()
@@ -262,13 +235,7 @@ object WallpaperStore {
 
             return if (isVideo) {
                 val targetMp4 = File(dir, "motion_$hash.mp4")
-                val ok = if (isMp4File(tmpDownload)) {
-                    // Instant zero-loss passthrough when remote file is already an MP4 container.
-                    tmpDownload.copyTo(targetMp4, overwrite = true)
-                    targetMp4.exists() && targetMp4.length() > 0L
-                } else {
-                    transcodeToDeviceH264Mp4(ctx, tmpDownload, targetMp4)
-                }
+                val ok = transcodeToDeviceH264Mp4(ctx, tmpDownload, targetMp4)
                 tmpDownload.delete()
                 if (ok && targetMp4.exists() && targetMp4.length() > 0L) {
                     ensureVideoPoster(targetMp4.absolutePath)
@@ -279,19 +246,14 @@ object WallpaperStore {
                     null
                 }
             } else {
-                val ext = when {
-                    contentType.contains("png") -> "png"
-                    contentType.contains("webp") -> "webp"
-                    else -> "jpg"
-                }
-                val targetImg = File(dir, "wall_$hash.$ext")
-                val ok = preserveHighQualityImage(ctx, tmpDownload, targetImg, ext)
+                val targetWebp = File(dir, "wall_$hash.webp")
+                val ok = normalizeImageToWebp(ctx, tmpDownload, targetWebp)
                 tmpDownload.delete()
-                if (ok && targetImg.exists() && targetImg.length() > 0L) {
+                if (ok && targetWebp.exists() && targetWebp.length() > 0L) {
                     cleanOldWallpapers(ctx)
-                    targetImg.absolutePath
+                    targetWebp.absolutePath
                 } else {
-                    targetImg.delete()
+                    targetWebp.delete()
                     null
                 }
             }
@@ -313,32 +275,23 @@ object WallpaperStore {
         onProgress: ((Float) -> Unit)? = null
     ): Boolean {
         if (!inputFile.exists() || inputFile.length() == 0L) return false
-        val isInputMp4 = isMp4File(inputFile) || inputFile.extension.equals("mp4", ignoreCase = true)
+        val targetMaxDim = getOptimalDeviceLongEdge(ctx)
+        val probe = probeVideo(inputFile.absolutePath)
+        val srcDurationMs = ((durationSec ?: probe.durationSec) * 1000f).coerceAtLeast(1000f)
 
-        // Untrimmed MP4: skip FFmpeg completely for instant, 100% lossless full-quality placement.
-        if (startSec == null && durationSec == null && isInputMp4) {
-            inputFile.copyTo(outputFile, overwrite = true)
-            onProgress?.invoke(1f)
-            return outputFile.exists() && outputFile.length() > 0L
-        }
-
-        // Trimmed MP4: attempt zero-loss FFmpeg stream copy first (completes in < 0.5s without re-encoding).
-        if (startSec != null && durationSec != null && isInputMp4) {
-            val fastCopyCmd = "-y -ss ${"%.2f".format(java.util.Locale.US, startSec)} " +
-                "-t ${"%.2f".format(java.util.Locale.US, durationSec)} " +
-                "-i \"${inputFile.absolutePath}\" -c:v copy -an -movflags +faststart \"${outputFile.absolutePath}\""
-            val copySession = FFmpegKit.execute(fastCopyCmd)
+        // Fast stream copy if full clip is already well-sized H.264 MP4 within 60fps
+        if (startSec == null && durationSec == null &&
+            probe.isMp4Container &&
+            probe.maxDim in 1..targetMaxDim &&
+            probe.fps <= 60f
+        ) {
+            val copyCmd = "-y -i \"${inputFile.absolutePath}\" -c:v copy -an -movflags +faststart \"${outputFile.absolutePath}\""
+            val copySession = FFmpegKit.execute(copyCmd)
             if (ReturnCode.isSuccess(copySession.returnCode) && outputFile.exists() && outputFile.length() > 1024L) {
                 onProgress?.invoke(1f)
                 return true
             }
-            if (outputFile.exists()) outputFile.delete()
         }
-
-        val deviceLongEdge = getOptimalDeviceLongEdge(ctx)
-        val probe = probeVideo(inputFile.absolutePath)
-        val targetMaxDim = max(deviceLongEdge, min(probe.maxDim.takeIf { it > 0 } ?: deviceLongEdge, 3840))
-        val srcDurationMs = ((durationSec ?: probe.durationSec) * 1000f).coerceAtLeast(1000f)
 
         if (onProgress != null) {
             FFmpegKitConfig.enableStatisticsCallback { stats ->
@@ -351,14 +304,14 @@ object WallpaperStore {
             "-ss ${"%.2f".format(java.util.Locale.US, startSec)} -t ${"%.2f".format(java.util.Locale.US, durationSec)} "
         } else ""
 
-        // Keep original FPS & max screen quality, only clamping GPU texture bounds to even dimensions.
+        // Keep aspect ratio, clamp long edge to device resolution, force even dimensions & <= 60fps
         val vf = "scale=w='min(iw,$targetMaxDim)':h='min(ih,$targetMaxDim)':force_original_aspect_ratio=decrease," +
-            "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=60"
 
         val codecs = listOf(
-            "-c:v h264_mediacodec -b:v 18M -pix_fmt yuv420p",
-            "-c:v libopenh264 -b:v 12M -pix_fmt yuv420p",
-            "-c:v mpeg4 -q:v 1 -pix_fmt yuv420p"
+            "-c:v h264_mediacodec -b:v 6M -pix_fmt yuv420p",
+            "-c:v libopenh264 -b:v 5M -pix_fmt yuv420p",
+            "-c:v mpeg4 -q:v 2 -pix_fmt yuv420p"
         )
 
         try {
@@ -380,24 +333,15 @@ object WallpaperStore {
         return false
     }
 
-    private fun preserveHighQualityImage(ctx: Context, srcFile: File, destFile: File, ext: String): Boolean {
+    private fun normalizeImageToWebp(ctx: Context, srcFile: File, destFile: File): Boolean {
         return try {
+            val maxDim = getOptimalDeviceLongEdge(ctx)
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(srcFile.absolutePath, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false
 
-            val rotation = readExifRotation(srcFile.absolutePath)
-            val srcMaxDim = max(bounds.outWidth, bounds.outHeight)
-            val safeMaxDim = max(getOptimalDeviceLongEdge(ctx), 4096)
-
-            // Fast lossless original passthrough when no EXIF rotation and within GPU texture limits
-            if (rotation == 0 && srcMaxDim <= safeMaxDim && ext in setOf("png", "webp", "jpg", "jpeg")) {
-                srcFile.copyTo(destFile, overwrite = true)
-                return destFile.exists() && destFile.length() > 0L
-            }
-
             var inSample = 1
-            while ((bounds.outWidth / inSample) > safeMaxDim * 2 || (bounds.outHeight / inSample) > safeMaxDim * 2) {
+            while ((bounds.outWidth / inSample) > maxDim * 2 || (bounds.outHeight / inSample) > maxDim * 2) {
                 inSample *= 2
             }
             val decodeOpts = BitmapFactory.Options().apply {
@@ -406,6 +350,8 @@ object WallpaperStore {
             }
             var bmp = BitmapFactory.decodeFile(srcFile.absolutePath, decodeOpts) ?: return false
 
+            // Apply EXIF orientation if needed
+            val rotation = readExifRotation(srcFile.absolutePath)
             if (rotation != 0) {
                 val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
                 val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
@@ -415,9 +361,10 @@ object WallpaperStore {
                 }
             }
 
+            // Downscale smoothly to optimal device resolution
             val curMax = max(bmp.width, bmp.height)
-            if (curMax > safeMaxDim) {
-                val scale = safeMaxDim.toFloat() / curMax.toFloat()
+            if (curMax > maxDim) {
+                val scale = maxDim.toFloat() / curMax.toFloat()
                 val tw = (bmp.width * scale).toInt().coerceAtLeast(1)
                 val th = (bmp.height * scale).toInt().coerceAtLeast(1)
                 val scaled = Bitmap.createScaledBitmap(bmp, tw, th, true)
@@ -429,11 +376,7 @@ object WallpaperStore {
 
             val tmpOut = File(destFile.parentFile, "${destFile.name}.tmp")
             tmpOut.outputStream().use { out ->
-                when (ext) {
-                    "jpg", "jpeg" -> bmp.compress(Bitmap.CompressFormat.JPEG, 100, out)
-                    "png" -> bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    else -> bmp.compress(losslessWebpFormat(), 100, out)
-                }
+                bmp.compress(webpFormat(), 90, out)
             }
             bmp.recycle()
             if (!tmpOut.renameTo(destFile)) {
@@ -442,21 +385,8 @@ object WallpaperStore {
             }
             destFile.exists() && destFile.length() > 0L
         } catch (e: Exception) {
-            UHLog.e("wallpaper_error", "preserveHighQualityImage failed: ${e.message}")
+            UHLog.e("wallpaper_error", "normalizeImageToWebp failed: ${e.message}")
             false
-        }
-    }
-
-    private fun guessImageExtensionFromUri(ctx: Context, uri: Uri): String {
-        val mime = ctx.contentResolver.getType(uri).orEmpty().lowercase()
-        return when {
-            mime.contains("png") -> "png"
-            mime.contains("webp") -> "webp"
-            mime.contains("jpeg") || mime.contains("jpg") -> "jpg"
-            else -> {
-                val p = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase().orEmpty()
-                if (p in setOf("png", "webp", "jpg", "jpeg")) p else "png"
-            }
         }
     }
 
@@ -466,7 +396,7 @@ object WallpaperStore {
         val thumb = generateVideoThumbnail(videoPath) ?: return
         try {
             poster.outputStream().use { out ->
-                thumb.compress(losslessWebpFormat(), 100, out)
+                thumb.compress(webpFormat(), 88, out)
             }
         } catch (_: Exception) {
         } finally {

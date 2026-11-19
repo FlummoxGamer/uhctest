@@ -124,9 +124,9 @@ class TrimVideoActivity : AppCompatActivity() {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-                val maxClipWindow = durationSec.coerceAtLeast(1f)
+                val maxClipWindow = min(durationSec, 30f)
 
-                var range by remember { mutableStateOf(0f..durationSec.coerceAtLeast(1f)) }
+                var range by remember { mutableStateOf(0f..min(durationSec, 15f)) }
                 var frames by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
                 var isPlaying by remember { mutableStateOf(true) }
                 var currentPlayheadSec by remember { mutableFloatStateOf(0f) }
@@ -181,11 +181,10 @@ class TrimVideoActivity : AppCompatActivity() {
                     }
                 }
 
-                fun applyTrimAndSave(useFullOriginal: Boolean = false) {
+                fun applyTrimAndSave() {
                     if (isProcessing) return
-                    val startSec = if (useFullOriginal) 0f else range.start.coerceAtLeast(0f)
-                    val clipDuration = if (useFullOriginal) durationSec else (range.endInclusive - startSec).coerceIn(1f, 60f)
-                    val isUntrimmed = useFullOriginal || (startSec <= 0.15f && clipDuration >= durationSec - 0.35f)
+                    val startSec = range.start.coerceAtLeast(0f)
+                    val clipDuration = (range.endInclusive - startSec).coerceIn(1f, 30f)
                     isProcessing = true
                     progressFraction = 0.05f
                     exoPlayer.pause()
@@ -198,21 +197,17 @@ class TrimVideoActivity : AppCompatActivity() {
                             contentResolver.openInputStream(videoUri)?.use { input ->
                                 inputFile.outputStream().use { output -> input.copyTo(output) }
                             }
-                            val finalPath = if (isUntrimmed && WallpaperStore.isMp4File(inputFile)) {
-                                // Already MP4 and full duration requested: skip FFmpeg completely for instant lossless copy.
-                                progressFraction = 0.85f
-                                WallpaperStore.saveMotionWallpaperFile(this@TrimVideoActivity, inputFile)
-                            } else {
-                                val ok = WallpaperStore.transcodeToDeviceH264Mp4(
-                                    ctx = this@TrimVideoActivity,
-                                    inputFile = inputFile,
-                                    outputFile = outputFile,
-                                    startSec = if (isUntrimmed) null else startSec,
-                                    durationSec = if (isUntrimmed) null else clipDuration,
-                                    onProgress = { pct -> progressFraction = pct }
-                                )
-                                if (ok) WallpaperStore.saveMotionWallpaperFile(this@TrimVideoActivity, outputFile) else null
-                            }
+                            val ok = WallpaperStore.transcodeToDeviceH264Mp4(
+                                ctx = this@TrimVideoActivity,
+                                inputFile = inputFile,
+                                outputFile = outputFile,
+                                startSec = startSec,
+                                durationSec = clipDuration,
+                                onProgress = { pct -> progressFraction = pct }
+                            )
+                            val finalPath = if (ok) {
+                                WallpaperStore.saveMotionWallpaperFile(this@TrimVideoActivity, outputFile)
+                            } else null
 
                             withContext(Dispatchers.Main) {
                                 isProcessing = false
@@ -321,7 +316,7 @@ class TrimVideoActivity : AppCompatActivity() {
                             TopBarControls(
                                 onClose = { finish() },
                                 selectedDurationSec = (range.endInclusive - range.start).coerceAtLeast(1f),
-                                srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "Full Quality",
+                                srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "MP4 Optimize",
                                 onConfirm = { applyTrimAndSave() },
                                 isProcessing = isProcessing,
                                 modifier = Modifier
@@ -403,14 +398,14 @@ class TrimVideoActivity : AppCompatActivity() {
                                     )
                                     Spacer(modifier = Modifier.height(14.dp))
                                     Text(
-                                        text = "Preparing Motion Wallpaper",
+                                        text = "Optimizing Motion Wallpaper",
                                         color = Color.White,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = "Preserving full quality (${(animatedProgress * 100).toInt()}%)",
+                                        text = "Encoding hardware H.264 MP4 (${(animatedProgress * 100).toInt()}%)",
                                         color = Color.White.copy(alpha = 0.72f),
                                         fontSize = 13.sp
                                     )
@@ -638,7 +633,7 @@ private fun TrimControlsPanel(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Full quality • Instant MP4 passthrough when untrimmed",
+                            text = "Trim up to 30s • Optimized to H.264 60fps",
                             color = Color.White.copy(alpha = 0.58f),
                             fontSize = 11.sp
                         )
@@ -731,24 +726,16 @@ private fun TrimControlsPanel(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val fullCap = durationSec.coerceAtMost(60f)
-                listOf(5f to "5s", 10f to "10s", 15f to "15s", fullCap to "Full").forEach { (sec, label) ->
-                    val enabled = label == "Full" || durationSec >= sec - 0.5f || label == "5s"
-                    val targetLen = if (label == "Full") durationSec else min(durationSec, sec)
-                    val isSelected = kotlin.math.abs((range.endInclusive - range.start) - targetLen) < 0.8f
+                listOf(5f to "5s", 10f to "10s", 15f to "15s", 30f to "30s").forEach { (sec, label) ->
+                    val enabled = durationSec >= sec - 0.5f || label == "5s"
+                    val isSelected = kotlin.math.abs((range.endInclusive - range.start) - min(durationSec, sec)) < 0.8f
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = if (isSelected) primary.copy(alpha = 0.26f) else Color.White.copy(alpha = 0.08f),
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = enabled) {
-                                if (label == "Full") {
-                                    onRangeChange(0f..durationSec)
-                                } else {
-                                    onPresetDuration(sec)
-                                }
-                            }
+                            .clickable(enabled = enabled) { onPresetDuration(sec) }
                     ) {
                         Box(
                             modifier = Modifier.padding(vertical = 8.dp),
