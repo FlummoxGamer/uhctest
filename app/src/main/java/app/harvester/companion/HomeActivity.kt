@@ -3,7 +3,6 @@ package app.harvester.companion
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -13,10 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.fragment.app.FragmentContainerView
+import androidx.fragment.compose.AndroidFragment
+import androidx.fragment.compose.rememberFragmentState
 import androidx.navigation.NavController
 import androidx.navigation.NavOptions
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -33,6 +33,7 @@ class HomeActivity : AppCompatActivity() {
 
     private val browserViewModel: BrowserViewModel by viewModels()
     private var navControllerState by mutableStateOf<NavController?>(null)
+    private var navHostFragmentRef: NavHostFragment? = null
     private var pendingIntent: Intent? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,27 +67,34 @@ class HomeActivity : AppCompatActivity() {
             val isOnHome = (currentDestId == R.id.homeFragment || currentDestId == null) && !isEditing
             val lightStatusOverride = if (isOnHome) wallpaperState.isTopDark?.let { !it } else null
             val lightNavOverride = if (isOnHome) wallpaperState.isBottomDark?.let { !it } else null
+            val navHostState = rememberFragmentState()
+            val navHostArgs = remember {
+                NavHostFragment.create(R.navigation.nav_graph).arguments ?: Bundle.EMPTY
+            }
 
             UHTheme(
                 lightStatusBarOverride = lightStatusOverride,
                 lightNavigationBarOverride = lightNavOverride
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AndroidView(
-                        factory = { context ->
-                            FragmentContainerView(context).apply {
-                                id = R.id.nav_host_fragment
-                                addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                                    override fun onViewAttachedToWindow(v: View) {
-                                        v.removeOnAttachStateChangeListener(this)
-                                        ensureNavHostAttached()
-                                    }
-
-                                    override fun onViewDetachedFromWindow(v: View) = Unit
-                                })
+                    AndroidFragment<NavHostFragment>(
+                        modifier = Modifier.fillMaxSize(),
+                        fragmentState = navHostState,
+                        arguments = navHostArgs,
+                        onUpdate = { host ->
+                            navHostFragmentRef = host
+                            val navCtrl = host.navController
+                            if (navControllerState !== navCtrl) {
+                                navControllerState = navCtrl
                             }
-                        },
-                        modifier = Modifier.fillMaxSize()
+                            val queued = pendingIntent
+                            if (queued != null) {
+                                pendingIntent = null
+                                window?.decorView?.post {
+                                    handleIntent(queued, navCtrl)
+                                }
+                            }
+                        }
                     )
 
                     if (controller != null) {
@@ -103,14 +111,14 @@ class HomeActivity : AppCompatActivity() {
 
         android.os.Looper.myQueue().addIdleHandler {
             try {
-                (application as? UHApp)?.components?.engine
+                (application as? UHApp)?.ensureBrowserServicesStarted()
             } catch (_: Exception) {}
             false
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val controller = navControllerState
+                val controller = activeNavController()
                 if (browserViewModel.isEditing.value) {
                     browserViewModel.exitEditMode()
                     return
@@ -119,8 +127,9 @@ class HomeActivity : AppCompatActivity() {
                     browserViewModel.closeFindInPage()
                     return
                 }
-                val navHost = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)
-                val activeBrowser = navHost?.childFragmentManager?.fragments?.firstOrNull { it is BrowserFragment && it.isVisible } as? BrowserFragment
+                val navHost = activeNavHostFragment()
+                val activeBrowser = navHost?.childFragmentManager?.fragments
+                    ?.firstOrNull { it is BrowserFragment && it.isVisible } as? BrowserFragment
                 if (activeBrowser != null) {
                     if (activeBrowser.onBackPressed()) {
                         return
@@ -142,37 +151,18 @@ class HomeActivity : AppCompatActivity() {
         })
     }
 
-    private fun ensureNavHostAttached() {
-        if (isFinishing || isDestroyed || supportFragmentManager.isStateSaved) return
-        try {
-            val existing = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
-            val host = if (existing == null) {
-                val created = NavHostFragment.create(R.navigation.nav_graph)
-                supportFragmentManager.beginTransaction()
-                    .replace(R.id.nav_host_fragment, created)
-                    .setPrimaryNavigationFragment(created)
-                    .commitNow()
-                created
-            } else {
-                existing
-            }
-            val navCtrl = host.navController
-            if (navControllerState !== navCtrl) {
-                navControllerState = navCtrl
-                val queued = pendingIntent
-                pendingIntent = null
-                handleIntent(queued ?: intent, navCtrl)
-            }
-        } catch (e: Exception) {
-            UHLog.throwable("ui_error", "Failed to initialize NavHostFragment/NavController", e)
-        }
+    fun activeNavHostFragment(): NavHostFragment? {
+        return navHostFragmentRef
+            ?: supportFragmentManager.fragments.filterIsInstance<NavHostFragment>().firstOrNull()
+    }
+
+    fun activeNavController(): NavController? {
+        return navControllerState ?: activeNavHostFragment()?.navController
     }
 
     fun navigateFromMenu(destinationId: Int) {
         window?.decorView?.post {
-            val controller = navControllerState
-                ?: (supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment)?.navController
-                ?: return@post
+            val controller = activeNavController() ?: return@post
             try {
                 if (controller.currentDestination?.id == destinationId) return@post
                 val options = NavOptions.Builder()
@@ -185,7 +175,7 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    private fun handleIntent(intent: Intent?, controller: NavController? = navControllerState) {
+    private fun handleIntent(intent: Intent?, controller: NavController? = activeNavController()) {
         val url = intent?.data?.toString() ?: return
         if (!url.startsWith("http")) {
             UHLog.w("ui_warn", "Ignored non-http intent URL: $url")
@@ -209,10 +199,10 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (navControllerState == null) {
-            ensureNavHostAttached()
+        val app = application as? UHApp
+        if (app?.isComponentsInitialized == true) {
+            app.components.resumePendingNetworkDownloads()
         }
-        (application as? UHApp)?.components?.resumePendingNetworkDownloads()
     }
 
     override fun onNewIntent(intent: Intent) {

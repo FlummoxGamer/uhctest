@@ -1,15 +1,16 @@
 package app.harvester.companion
 
 import android.app.Application
-import android.os.Build
 import android.content.Context
-import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import app.harvester.companion.components.Components
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,18 @@ import xcrash.XCrash
 
 class UHApp : Application(), coil.ImageLoaderFactory {
 
-    val components by lazy { Components(this) }
+    @Volatile
+    var isComponentsInitialized: Boolean = false
+        private set
+
+    private val browserServicesStarted = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    val components by lazy {
+        Components(this).also {
+            isComponentsInitialized = true
+        }
+    }
     val applicationScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
             UHLog.e("scope", "Unhandled coroutine error: ${throwable.message}")
@@ -50,7 +62,7 @@ class UHApp : Application(), coil.ImageLoaderFactory {
         }
 
         SessionRecorder.init(this)
-        components.store.dispatch(mozilla.components.browser.state.action.DownloadAction.RestoreDownloadsStateAction)
+        app.harvester.companion.core.lifecycle.AppSleepManager.init(this)
 
         applicationScope.launch {
             try {
@@ -68,9 +80,26 @@ class UHApp : Application(), coil.ImageLoaderFactory {
             LeakCanarySetup.setup(this)
         }
 
-        app.harvester.companion.core.lifecycle.AppSleepManager.init(this, components)
+        mainHandler.post {
+            ensureBrowserServicesStarted()
+        }
 
         UHLog.d("perf", "App onCreate: ${System.currentTimeMillis() - start}ms")
+    }
+
+    fun ensureBrowserServicesStarted() {
+        if (File(filesDir, "safe_mode.flag").exists()) return
+        if (!browserServicesStarted.compareAndSet(false, true)) return
+        val start = System.currentTimeMillis()
+        try {
+            val appComponents = components
+            appComponents.store.dispatch(mozilla.components.browser.state.action.DownloadAction.RestoreDownloadsStateAction)
+            app.harvester.companion.core.lifecycle.AppSleepManager.attachComponentsAndRestore(appComponents)
+            UHLog.d("perf", "Browser services started: ${System.currentTimeMillis() - start}ms")
+        } catch (e: Exception) {
+            browserServicesStarted.set(false)
+            UHLog.throwable("boot_error", "Failed starting browser services", e)
+        }
     }
 
     override fun newImageLoader(): coil.ImageLoader {

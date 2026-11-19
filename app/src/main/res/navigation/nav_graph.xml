@@ -7,8 +7,7 @@
 
     <fragment
         android:id="@+id/homeFragment"
-        android:name="app.harvester.companion.home.HomeFragment"
-        tools:layout="@layout/fragment_home">
+        android:name="app.harvester.companion.home.HomeFragment">
         <action
             android:id="@+id/action_homeFragment_to_browserFragment"
             app:destination="@id/browserFragment" />
