@@ -209,15 +209,10 @@ class TabsTrayDialogFragment : BottomSheetDialogFragment() {
         }
     }
 
-    private fun resolveNavController() =
-        (activity as? app.harvester.companion.HomeActivity)?.activeNavController()
-            ?: activity?.supportFragmentManager?.fragments
-                ?.filterIsInstance<NavHostFragment>()
-                ?.firstOrNull()
-                ?.navController
-
     private fun navigateToHome() {
-        val controller = resolveNavController() ?: return
+        val act = activity ?: return
+        val navHostFragment = act.supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+        val controller = navHostFragment?.navController ?: return
         if (controller.currentDestination?.id != R.id.homeFragment) {
             try {
                 controller.popBackStack(R.id.homeFragment, false)
@@ -228,7 +223,9 @@ class TabsTrayDialogFragment : BottomSheetDialogFragment() {
     }
 
     private fun navigateToBrowserIfNeeded() {
-        val controller = resolveNavController() ?: return
+        val act = activity ?: return
+        val navHostFragment = act.supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+        val controller = navHostFragment?.navController ?: return
         if (controller.currentDestination?.id != R.id.browserFragment) {
             try {
                 controller.navigate(R.id.action_homeFragment_to_browserFragment)

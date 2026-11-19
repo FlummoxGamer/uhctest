@@ -1,7 +1,6 @@
 package app.harvester.companion
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -23,8 +22,6 @@ object UpdateChecker {
         val versionCode: Int,
         val versionName: String,
         val apkUrl: String,
-        val apkUrlArm64: String,
-        val apkUrlArm32: String,
         val changelog: String,
         val isDevChannel: Boolean
     )
@@ -36,41 +33,6 @@ object UpdateChecker {
         return "https://gh-proxy.com/https://raw.githubusercontent.com/FlummoxGamer/universal-harvester-companion/$branch/$file" to isDev
     }
 
-    private fun requireHttpsUrl(rawUrl: String): String {
-        val trimmed = rawUrl.trim()
-        val uri = Uri.parse(trimmed)
-        if (!uri.scheme.equals("https", ignoreCase = true) || uri.host.isNullOrBlank()) {
-            throw IllegalArgumentException("Update URL must use HTTPS")
-        }
-        return trimmed
-    }
-
-    fun resolveApkUrlForDevice(manifest: UpdateManifest): String {
-        val abis = Build.SUPPORTED_ABIS ?: emptyArray()
-        val candidate = when {
-            abis.any { it.equals("arm64-v8a", ignoreCase = true) } ->
-                manifest.apkUrlArm64.ifBlank { manifest.apkUrl }
-            abis.any { it.equals("armeabi-v7a", ignoreCase = true) || it.equals("armeabi", ignoreCase = true) } ->
-                manifest.apkUrlArm32.ifBlank { manifest.apkUrl }
-            else -> manifest.apkUrl
-        }
-        return candidate.ifBlank {
-            manifest.apkUrlArm64.ifBlank { manifest.apkUrlArm32 }
-        }
-    }
-
-    fun cleanupDownloadedUpdates(context: Context) {
-        try {
-            val updatesDir = File(context.cacheDir, "updates")
-            if (!updatesDir.exists()) return
-            updatesDir.listFiles()?.forEach { file ->
-                if (file.isFile && file.name.endsWith(".apk")) {
-                    file.delete()
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
     fun openUpdater(activity: Activity) {
         activity.startActivity(Intent(activity, UpdaterActivity::class.java))
     }
@@ -79,24 +41,19 @@ object UpdateChecker {
         try {
             val (url, isDev) = manifestUrl()
             val req = Request.Builder()
-                .url(requireHttpsUrl(url))
+                .url(url)
                 .header("User-Agent", "${UHBrand.NAME}-Updater/${BuildConfig.VERSION_NAME} (Android)")
                 .build()
-            UhHttpClient.secureClient.newCall(req).execute().use { resp ->
+            UhHttpClient.client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
                 val body = resp.body?.string().orEmpty()
                 val o = JSONObject(body)
                 val vc = o.optInt("versionCode", 0)
                 val vn = o.optString("versionName", "")
                 val apkUrl = o.optString("apkUrl", "")
-                val apkUrlArm64 = o.optString("apkUrlArm64", "")
-                val apkUrlArm32 = o.optString("apkUrlArm32", "")
                 val changelog = o.optString("changelog", "")
-                val manifest = UpdateManifest(vc, vn, apkUrl, apkUrlArm64, apkUrlArm32, changelog, isDev)
-                val resolvedUrl = resolveApkUrlForDevice(manifest)
-                if (vc <= 0 || resolvedUrl.isBlank()) throw IllegalStateException("Invalid manifest payload")
-                requireHttpsUrl(resolvedUrl)
-                Result.success(manifest)
+                if (vc <= 0 || apkUrl.isBlank()) throw IllegalStateException("Invalid manifest payload")
+                Result.success(UpdateManifest(vc, vn, apkUrl, changelog, isDev))
             }
         } catch (e: Exception) {
             UHLog.throwable("update", "manifest fetch failed", e)
@@ -114,15 +71,13 @@ object UpdateChecker {
             updatesDir.listFiles()?.forEach { old ->
                 if (old.isFile && old.name.endsWith(".apk")) old.delete()
             }
-            val downloadUrl = requireHttpsUrl(resolveApkUrlForDevice(manifest))
-            val safeVersion = manifest.versionName.replace(Regex("[^A-Za-z0-9._-]"), "_")
-            val outFile = File(updatesDir, "uh_update_${safeVersion}.apk")
+            val outFile = File(updatesDir, "uh_update_${manifest.versionName}.apk")
             val req = Request.Builder()
-                .url(downloadUrl)
+                .url(manifest.apkUrl)
                 .header("User-Agent", "${UHBrand.NAME}-Updater/${BuildConfig.VERSION_NAME} (Android)")
                 .build()
 
-            UhHttpClient.secureClient.newCall(req).execute().use { resp ->
+            UhHttpClient.client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
                 val body = resp.body ?: throw IllegalStateException("Empty response body")
                 val total = body.contentLength()

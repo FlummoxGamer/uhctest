@@ -56,6 +56,7 @@ object ThemePrefs {
     fun applyCurrent(ctx: Context) {
         val mode = getMode(ctx)
         _modeFlow.value = mode
+        syncEngineColorScheme(ctx, mode)
     }
 
     fun syncWebAppearance(ctx: Context) {
@@ -73,7 +74,6 @@ object ThemePrefs {
     private fun syncEngineColorScheme(ctx: Context, mode: Int) {
         try {
             val app = ctx.applicationContext as? UHApp ?: return
-            if (!app.isComponentsInitialized) return
             app.components.engine.settings.preferredColorScheme = when (mode) {
                 MODE_LIGHT -> PreferredColorScheme.Light
                 MODE_DARK -> PreferredColorScheme.Dark

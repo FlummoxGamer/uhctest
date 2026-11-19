@@ -1,7 +1,6 @@
 package app.harvester.companion
 
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -12,11 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.fragment.compose.AndroidFragment
-import androidx.fragment.compose.rememberFragmentState
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.fragment.app.FragmentContainerView
 import androidx.navigation.NavController
 import androidx.navigation.NavOptions
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -24,36 +22,15 @@ import androidx.navigation.fragment.NavHostFragment
 import app.harvester.companion.browser.BrowserFragment
 import app.harvester.companion.browser.BrowserViewModel
 import app.harvester.companion.browser.toolbar.UhGlobalToolbar
-import app.harvester.companion.safemode.SafeModeActivity
 import app.harvester.companion.theme.UHTheme
-import app.harvester.companion.utils.CrashChecker
-import java.io.File
 
 class HomeActivity : AppCompatActivity() {
 
     private val browserViewModel: BrowserViewModel by viewModels()
     private var navControllerState by mutableStateOf<NavController?>(null)
-    private var navHostFragmentRef: NavHostFragment? = null
-    private var pendingIntent: Intent? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= 30) {
-            CrashChecker.checkNativeCrashes(this)
-        }
-        if (File(filesDir, "safe_mode.flag").exists()) {
-            startActivity(
-                Intent(this, SafeModeActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                }
-            )
-            finish()
-            return
-        }
-
-        pendingIntent = intent
-
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
@@ -67,32 +44,39 @@ class HomeActivity : AppCompatActivity() {
             val isOnHome = (currentDestId == R.id.homeFragment || currentDestId == null) && !isEditing
             val lightStatusOverride = if (isOnHome) wallpaperState.isTopDark?.let { !it } else null
             val lightNavOverride = if (isOnHome) wallpaperState.isBottomDark?.let { !it } else null
-            val navHostState = rememberFragmentState()
-            val navHostArgs = remember {
-                NavHostFragment.create(R.navigation.nav_graph).arguments ?: Bundle.EMPTY
-            }
 
             UHTheme(
                 lightStatusBarOverride = lightStatusOverride,
                 lightNavigationBarOverride = lightNavOverride
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AndroidFragment<NavHostFragment>(
-                        modifier = Modifier.fillMaxSize(),
-                        fragmentState = navHostState,
-                        arguments = navHostArgs,
-                        onUpdate = { host ->
-                            navHostFragmentRef = host
-                            val navCtrl = host.navController
-                            if (navControllerState !== navCtrl) {
-                                navControllerState = navCtrl
+                    AndroidView(
+                        factory = { context ->
+                            FragmentContainerView(context).apply {
+                                id = R.id.nav_host_fragment
                             }
-                            val queued = pendingIntent
-                            if (queued != null) {
-                                pendingIntent = null
-                                window?.decorView?.post {
-                                    handleIntent(queued, navCtrl)
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        update = {
+                            try {
+                                val existing = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment
+                                val host = if (existing == null) {
+                                    val created = NavHostFragment.create(R.navigation.nav_graph)
+                                    supportFragmentManager.beginTransaction()
+                                        .replace(R.id.nav_host_fragment, created)
+                                        .setPrimaryNavigationFragment(created)
+                                        .commitNow()
+                                    created
+                                } else {
+                                    existing
                                 }
+                                val navCtrl = host.navController
+                                if (navControllerState !== navCtrl) {
+                                    navControllerState = navCtrl
+                                    handleIntent(intent, navCtrl)
+                                }
+                            } catch (e: Exception) {
+                                UHLog.throwable("ui_error", "Failed to initialize NavHostFragment/NavController", e)
                             }
                         }
                     )
@@ -111,14 +95,14 @@ class HomeActivity : AppCompatActivity() {
 
         android.os.Looper.myQueue().addIdleHandler {
             try {
-                (application as? UHApp)?.ensureBrowserServicesStarted()
+                (application as? UHApp)?.components?.engine
             } catch (_: Exception) {}
             false
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val controller = activeNavController()
+                val controller = navControllerState
                 if (browserViewModel.isEditing.value) {
                     browserViewModel.exitEditMode()
                     return
@@ -127,9 +111,8 @@ class HomeActivity : AppCompatActivity() {
                     browserViewModel.closeFindInPage()
                     return
                 }
-                val navHost = activeNavHostFragment()
-                val activeBrowser = navHost?.childFragmentManager?.fragments
-                    ?.firstOrNull { it is BrowserFragment && it.isVisible } as? BrowserFragment
+                val navHost = supportFragmentManager.findFragmentById(R.id.nav_host_fragment)
+                val activeBrowser = navHost?.childFragmentManager?.fragments?.firstOrNull { it is BrowserFragment && it.isVisible } as? BrowserFragment
                 if (activeBrowser != null) {
                     if (activeBrowser.onBackPressed()) {
                         return
@@ -151,18 +134,11 @@ class HomeActivity : AppCompatActivity() {
         })
     }
 
-    fun activeNavHostFragment(): NavHostFragment? {
-        return navHostFragmentRef
-            ?: supportFragmentManager.fragments.filterIsInstance<NavHostFragment>().firstOrNull()
-    }
-
-    fun activeNavController(): NavController? {
-        return navControllerState ?: activeNavHostFragment()?.navController
-    }
-
     fun navigateFromMenu(destinationId: Int) {
         window?.decorView?.post {
-            val controller = activeNavController() ?: return@post
+            val controller = navControllerState
+                ?: (supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment)?.navController
+                ?: return@post
             try {
                 if (controller.currentDestination?.id == destinationId) return@post
                 val options = NavOptions.Builder()
@@ -175,14 +151,14 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    private fun handleIntent(intent: Intent?, controller: NavController? = activeNavController()) {
+    private fun handleIntent(intent: Intent?, controller: NavController? = navControllerState) {
         val url = intent?.data?.toString() ?: return
         if (!url.startsWith("http")) {
             UHLog.w("ui_warn", "Ignored non-http intent URL: $url")
             return
         }
         if (controller == null) {
-            pendingIntent = intent
+            UHLog.w("ui_warn", "Cannot handle intent URL before NavController is ready: $url")
             return
         }
         try {
@@ -199,10 +175,7 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        val app = application as? UHApp
-        if (app?.isComponentsInitialized == true) {
-            app.components.resumePendingNetworkDownloads()
-        }
+        (application as? UHApp)?.components?.resumePendingNetworkDownloads()
     }
 
     override fun onNewIntent(intent: Intent) {

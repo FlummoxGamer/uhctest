@@ -1,16 +1,15 @@
 package app.harvester.companion
 
 import android.app.Application
+import android.os.Build
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
+import android.content.Intent
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import app.harvester.companion.components.Components
 import java.io.File
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,18 +20,7 @@ import xcrash.XCrash
 
 class UHApp : Application(), coil.ImageLoaderFactory {
 
-    @Volatile
-    var isComponentsInitialized: Boolean = false
-        private set
-
-    private val browserServicesStarted = AtomicBoolean(false)
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    val components by lazy {
-        Components(this).also {
-            isComponentsInitialized = true
-        }
-    }
+    val components by lazy { Components(this) }
     val applicationScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
             UHLog.e("scope", "Unhandled coroutine error: ${throwable.message}")
@@ -47,22 +35,16 @@ class UHApp : Application(), coil.ImageLoaderFactory {
     override fun onCreate() {
         val start = System.currentTimeMillis()
         super.onCreate()
-
-        if (applicationContext.packageName != Application.getProcessName()) {
+    
+        if (File(filesDir, "safe_mode.flag").exists() || applicationContext.packageName != Application.getProcessName()) {
             return
         }
 
         UHLog.init(this)
-        ThemePrefs.applyCurrent(this)
-        movePendingCrashFile()
-
-        if (File(filesDir, "safe_mode.flag").exists()) {
-            UHLog.w("safe_mode", "Pending safe_mode.flag detected; deferring browser engine startup.")
-            return
-        }
-
         SessionRecorder.init(this)
-        app.harvester.companion.core.lifecycle.AppSleepManager.init(this)
+        ThemePrefs.applyCurrent(this)
+        components.store.dispatch(mozilla.components.browser.state.action.DownloadAction.RestoreDownloadsStateAction)
+        movePendingCrashFile()
 
         applicationScope.launch {
             try {
@@ -80,26 +62,9 @@ class UHApp : Application(), coil.ImageLoaderFactory {
             LeakCanarySetup.setup(this)
         }
 
-        mainHandler.post {
-            ensureBrowserServicesStarted()
-        }
+        app.harvester.companion.core.lifecycle.AppSleepManager.init(this, components)
 
         UHLog.d("perf", "App onCreate: ${System.currentTimeMillis() - start}ms")
-    }
-
-    fun ensureBrowserServicesStarted() {
-        if (File(filesDir, "safe_mode.flag").exists()) return
-        if (!browserServicesStarted.compareAndSet(false, true)) return
-        val start = System.currentTimeMillis()
-        try {
-            val appComponents = components
-            appComponents.store.dispatch(mozilla.components.browser.state.action.DownloadAction.RestoreDownloadsStateAction)
-            app.harvester.companion.core.lifecycle.AppSleepManager.attachComponentsAndRestore(appComponents)
-            UHLog.d("perf", "Browser services started: ${System.currentTimeMillis() - start}ms")
-        } catch (e: Exception) {
-            browserServicesStarted.set(false)
-            UHLog.throwable("boot_error", "Failed starting browser services", e)
-        }
     }
 
     override fun newImageLoader(): coil.ImageLoader {
@@ -128,7 +93,7 @@ class UHApp : Application(), coil.ImageLoaderFactory {
             params.setAppVersion(BuildConfig.VERSION_NAME)
             params.setLogDir("${context.filesDir.absolutePath}/crashes")
 
-            val crashCallback = ICrashCallback { logPath, emergency ->
+            val callback = ICrashCallback { logPath, emergency ->
                 try {
                     val crashFile = File(context.filesDir, "last_crash.txt")
                     val content = if (!logPath.isNullOrBlank() && File(logPath).exists()) {
@@ -141,21 +106,9 @@ class UHApp : Application(), coil.ImageLoaderFactory {
                 } catch (_: Exception) {}
             }
 
-            val anrCallback = ICrashCallback { logPath, emergency ->
-                try {
-                    val crashDir = File(context.filesDir, "crashes").apply { mkdirs() }
-                    val content = if (!logPath.isNullOrBlank() && File(logPath).exists()) {
-                        File(logPath).readText()
-                    } else {
-                        emergency ?: "ANR detected"
-                    }
-                    File(crashDir, "anr_${System.currentTimeMillis()}.txt").writeText(content)
-                } catch (_: Exception) {}
-            }
-
-            params.setJavaCallback(crashCallback)
-            params.setNativeCallback(crashCallback)
-            params.setAnrCallback(anrCallback)
+            params.setJavaCallback(callback)
+            params.setNativeCallback(callback)
+            params.setAnrCallback(callback)
 
             XCrash.init(context, params)
         } catch (_: Throwable) {}

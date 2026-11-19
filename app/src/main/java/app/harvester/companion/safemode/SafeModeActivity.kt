@@ -101,6 +101,8 @@ class SafeModeActivity : AppCompatActivity() {
             if (safeFlag.exists()) safeFlag.delete()
             val crashDir = File(filesDir, "crashes")
             crashDir.deleteRecursively()
+            val geckoDir = File(filesDir, "mozilla")
+            if (geckoDir.exists()) geckoDir.deleteRecursively()
         } catch (_: Exception) {}
     }
 
