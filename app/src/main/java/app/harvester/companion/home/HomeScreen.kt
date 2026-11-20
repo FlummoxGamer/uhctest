@@ -68,6 +68,7 @@ import app.harvester.companion.R
 import app.harvester.companion.Shortcut
 import app.harvester.companion.UHBrand
 import app.harvester.companion.UHLog
+import app.harvester.companion.WallpaperStore
 import app.harvester.companion.utils.reorderable.DragGestureDetector
 import app.harvester.companion.utils.reorderable.ReorderableItem
 import app.harvester.companion.utils.reorderable.rememberReorderableLazyGridState
@@ -78,9 +79,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun HomeScreen(
     shortcuts: List<Shortcut>,
-    wallpaperPath: String?,
-    isVideo: Boolean,
-    textColorInt: Int,
+    wallpaperState: WallpaperStore.WallpaperState,
+    isWallpaperPlaybackActive: Boolean = true,
     onEditHomeClick: () -> Unit,
     onShortcutOpen: (String) -> Unit,
     onMoveShortcut: (Int, Int) -> Unit,
@@ -108,6 +108,8 @@ fun HomeScreen(
         )
     }
 
+    val wallpaperPath = wallpaperState.path
+    val textColorInt = wallpaperState.textColor
     val hasWallpaper = !wallpaperPath.isNullOrBlank() && wallpaperPath != "default"
     val textColor = if (textColorInt == 0 || !hasWallpaper) {
         MaterialTheme.colorScheme.onBackground
@@ -130,7 +132,14 @@ fun HomeScreen(
             .fillMaxSize()
             .background(if (!hasWallpaper) MaterialTheme.colorScheme.background else Color.Transparent)
     ) {
-        WallpaperBackground(path = wallpaperPath, isVideo = isVideo)
+        WallpaperBackground(
+            path = wallpaperState.path,
+            isVideo = wallpaperState.isVideo,
+            dimAlpha = wallpaperState.dimAlpha,
+            portraitTransform = wallpaperState.portraitTransform,
+            landscapeTransform = wallpaperState.landscapeTransform,
+            isPlaybackActive = isWallpaperPlaybackActive,
+        )
 
         if (isLandscape) {
             // Dedicated Landscape Two-Zone Layout: Clean hero brand left, bounded scrollable shortcut canvas right

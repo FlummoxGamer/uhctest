@@ -63,6 +63,7 @@ import app.harvester.companion.ShortcutStore
 import app.harvester.companion.WallpaperStore
 import app.harvester.companion.settings.components.UhSettingsScaffold
 import app.harvester.companion.theme.UHTheme
+import app.harvester.companion.wallpaper.WallpaperCatalog
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
@@ -74,65 +75,6 @@ import java.io.File
 class CustomizeHomeActivity : AppCompatActivity() {
 
     private var reloadTick by mutableIntStateOf(0)
-
-    private val categorizedWallpapers = linkedMapOf(
-        "Motion" to listOf(
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_1.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_2.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_3.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_4.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_5.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_6.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_7.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_8.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_9.mp4",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/motion/motion_10.mp4"
-        ),
-        "Anime" to listOf(
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_1.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_2.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_3.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_4.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_5.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_6.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_7.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_8.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_9.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_10.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_11.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_12.webp",
-            "https://cdn.jsdelivr.net/gh/FlummoxGamer/universal-harvester-companion@dev/wallpapers/anime/anime_13.webp"
-        ),
-        "Cinematic" to listOf(
-            "https://images.unsplash.com/photo-1478720568477-152d9b164e26?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1485846234645-a62644f84728?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1485095329183-d0797cdc5676?q=80&w=2000&auto=format&fit=crop"
-        ),
-        "Abstract" to listOf(
-            "https://images.unsplash.com/photo-1614850523459-c2f4c699c52e?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1579546929518-9e396f3cc809?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1554034483-04fda0d3507b?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1507608616759-54f48f0af0ee?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1557672172-298e090bd0f1?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1604871000636-074fa5117945?q=80&w=2000&auto=format&fit=crop"
-        ),
-        "Liquid Metal" to listOf(
-            "https://images.unsplash.com/photo-1614850523459-c2f4c699c52e?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1604871000636-074fa5117945?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1557672172-298e090bd0f1?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1614850715649-1d0106293bd1?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=2000&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1618005198919-d3d4b5a92ead?q=80&w=2000&auto=format&fit=crop"
-        )
-    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -148,8 +90,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                 val columns = if (isLandscape) 6 else 4
                 val tick = reloadTick
                 val wallpaperState by WallpaperStore.wallpaperFlow(context).collectAsState()
-                val activePath = wallpaperState.path ?: "default"
-                val storedRecents = remember(tick, activePath) {
+                val storedRecents = remember(tick, wallpaperState.path) {
                     WallpaperStore.getRecent(context).take(if (isLandscape) 4 else 2)
                 }
                 var showResetConfirm by remember { mutableStateOf(false) }
@@ -181,7 +122,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                                             }
                                         )
                                     } else {
-                                        Toast.makeText(context, "Failed to optimize wallpaper", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Failed to import wallpaper", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
@@ -193,14 +134,14 @@ class CustomizeHomeActivity : AppCompatActivity() {
                     AlertDialog(
                         onDismissRequest = {},
                         confirmButton = {},
-                        title = { Text("Optimizing Image", color = MaterialTheme.colorScheme.onSurface) },
+                        title = { Text("Importing Image", color = MaterialTheme.colorScheme.onSurface) },
                         text = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                Text("Converting to crisp WebP...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Saving full-quality original...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         },
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -282,7 +223,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                     WallpaperTileGrid(
                         tiles = topTiles,
                         columns = columns,
-                        activePath = activePath,
+                        wallpaperState = wallpaperState,
                         onTileClick = { tile ->
                             when (tile) {
                                 is HomeWallpaperTile.Add -> {
@@ -324,12 +265,12 @@ class CustomizeHomeActivity : AppCompatActivity() {
                             )
                         },
                         onDeleteFromMenu = { path ->
-                            WallpaperStore.deleteWallpaper(path)
+                            WallpaperStore.deleteWallpaper(context, path)
                             reloadTick++
                         }
                     )
 
-                    categorizedWallpapers.forEach { (genre, urls) ->
+                    WallpaperCatalog.categorizedWallpapers.forEach { (genre, urls) ->
                         Text(
                             text = genre,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -341,12 +282,13 @@ class CustomizeHomeActivity : AppCompatActivity() {
                         WallpaperTileGrid(
                             tiles = urls.map { HomeWallpaperTile.Remote(it, isVideo) },
                             columns = columns,
-                            activePath = activePath,
+                            wallpaperState = wallpaperState,
                             onTileClick = { tile ->
                                 if (tile is HomeWallpaperTile.Remote) {
                                     context.startActivity(
                                         Intent(context, WallpaperPreviewActivity::class.java).apply {
                                             putExtra("imageUrl", tile.url)
+                                            putStringArrayListExtra("catalogUrls", ArrayList(urls))
                                             putExtra("isCustom", false)
                                             putExtra("isVideo", tile.isVideo)
                                         }
@@ -395,7 +337,7 @@ sealed class HomeWallpaperTile {
 fun WallpaperTileGrid(
     tiles: List<HomeWallpaperTile>,
     columns: Int = 4,
-    activePath: String,
+    wallpaperState: WallpaperStore.WallpaperState,
     onTileClick: (HomeWallpaperTile) -> Unit,
     onSetFromMenu: (String) -> Unit,
     onDeleteFromMenu: (String) -> Unit,
@@ -410,7 +352,7 @@ fun WallpaperTileGrid(
                     Box(modifier = Modifier.weight(1f)) {
                         WallpaperGridTile(
                             tile = tile,
-                            activePath = activePath,
+                            wallpaperState = wallpaperState,
                             onClick = { onTileClick(tile) },
                             onSetFromMenu = onSetFromMenu,
                             onDeleteFromMenu = onDeleteFromMenu
@@ -429,7 +371,7 @@ fun WallpaperTileGrid(
 @Composable
 private fun WallpaperGridTile(
     tile: HomeWallpaperTile,
-    activePath: String,
+    wallpaperState: WallpaperStore.WallpaperState,
     onClick: () -> Unit,
     onSetFromMenu: (String) -> Unit,
     onDeleteFromMenu: (String) -> Unit,
@@ -437,6 +379,7 @@ private fun WallpaperGridTile(
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
 
+    val activePath = wallpaperState.path ?: "default"
     val customPath = when (tile) {
         is HomeWallpaperTile.Custom -> tile.path
         is HomeWallpaperTile.Motion -> tile.path
@@ -444,10 +387,10 @@ private fun WallpaperGridTile(
     }
 
     val isActive = when (tile) {
-        is HomeWallpaperTile.Default -> activePath == "default"
+        is HomeWallpaperTile.Default -> activePath == "default" || activePath.isBlank()
         is HomeWallpaperTile.Custom -> tile.path == activePath
         is HomeWallpaperTile.Motion -> tile.path == activePath
-        is HomeWallpaperTile.Remote -> tile.url == activePath
+        is HomeWallpaperTile.Remote -> WallpaperStore.isRemoteUrlActive(context, tile.url, wallpaperState)
         is HomeWallpaperTile.Add -> false
     }
 
@@ -488,8 +431,15 @@ private fun WallpaperGridTile(
             }
             is HomeWallpaperTile.Custom -> {
                 val model: Any = if (tile.path.startsWith("http")) tile.path else File(tile.path)
+                val req = remember(model) {
+                    ImageRequest.Builder(context)
+                        .data(model)
+                        .size(480, 720)
+                        .crossfade(true)
+                        .build()
+                }
                 AsyncImage(
-                    model = model,
+                    model = req,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -505,8 +455,9 @@ private fun WallpaperGridTile(
                 val req = remember(tile.path, poster.exists()) {
                     ImageRequest.Builder(context)
                         .data(model)
+                        .size(480, 720)
                         .apply {
-                            if (!poster.exists()) videoFrameMillis(500L)
+                            if (!poster.exists()) videoFrameMillis(0L)
                         }
                         .crossfade(true)
                         .build()
@@ -520,9 +471,13 @@ private fun WallpaperGridTile(
                 )
             }
             is HomeWallpaperTile.Remote -> {
-                val req = remember(tile.url, tile.isVideo) {
+                val thumbUrl = remember(tile.url, tile.isVideo) {
+                    if (tile.isVideo) tile.url else WallpaperCatalog.thumbnailUrl(tile.url)
+                }
+                val req = remember(thumbUrl, tile.isVideo) {
                     ImageRequest.Builder(context)
-                        .data(tile.url)
+                        .data(thumbUrl)
+                        .size(480, 720)
                         .apply {
                             if (tile.isVideo) videoFrameMillis(500L)
                         }

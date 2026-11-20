@@ -50,8 +50,7 @@ class RecentlyActivity : AppCompatActivity() {
                 val columns = if (isLandscape) 6 else 4
                 val tick = reloadTick
                 val wallpaperState by WallpaperStore.wallpaperFlow(context).collectAsState()
-                val activePath = wallpaperState.path ?: "default"
-                val recentTiles = remember(tick, activePath) {
+                val recentTiles = remember(tick, wallpaperState.path) {
                     WallpaperStore.getRecent(context).map { path ->
                         if (WallpaperStore.isVideoFileOrUrl(path)) HomeWallpaperTile.Motion(path)
                         else HomeWallpaperTile.Custom(path)
@@ -89,7 +88,7 @@ class RecentlyActivity : AppCompatActivity() {
                         WallpaperTileGrid(
                             tiles = recentTiles,
                             columns = columns,
-                            activePath = activePath,
+                            wallpaperState = wallpaperState,
                             onTileClick = { tile ->
                                 val path = when (tile) {
                                     is HomeWallpaperTile.Custom -> tile.path
@@ -116,7 +115,7 @@ class RecentlyActivity : AppCompatActivity() {
                                 )
                             },
                             onDeleteFromMenu = { path ->
-                                WallpaperStore.deleteWallpaper(path)
+                                WallpaperStore.deleteWallpaper(context, path)
                                 reloadTick++
                             }
                         )

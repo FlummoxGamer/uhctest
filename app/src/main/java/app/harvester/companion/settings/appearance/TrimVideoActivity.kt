@@ -7,7 +7,6 @@ import android.graphics.Color as AndroidColor
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
-import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
@@ -41,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -68,36 +68,34 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import app.harvester.companion.R
 import app.harvester.companion.UHLog
 import app.harvester.companion.WallpaperStore
 import app.harvester.companion.theme.UHTheme
+import app.harvester.companion.wallpaper.WallpaperMediaProcessor
+import app.harvester.companion.wallpaper.WallpaperPlaybackController
+import app.harvester.companion.wallpaper.WallpaperVideoSurface
 import com.arthenica.ffmpegkit.FFmpegKitConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.Locale
 import kotlin.math.min
 
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class TrimVideoActivity : AppCompatActivity() {
 
     private data class VideoMeta(
         val durationSec: Float,
         val width: Int,
-        val height: Int
+        val height: Int,
+        val isMp4: Boolean,
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -112,14 +110,13 @@ class TrimVideoActivity : AppCompatActivity() {
             return
         }
         val videoUri = Uri.parse(uriString)
-
         val meta = readVideoMeta(videoUri)
         val durationSec = meta.durationSec
 
         setContent {
             UHTheme(
                 lightStatusBarOverride = false,
-                lightNavigationBarOverride = false
+                lightNavigationBarOverride = false,
             ) {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
@@ -131,30 +128,32 @@ class TrimVideoActivity : AppCompatActivity() {
                 var isPlaying by remember { mutableStateOf(true) }
                 var currentPlayheadSec by remember { mutableFloatStateOf(0f) }
                 var isProcessing by remember { mutableStateOf(false) }
+                var processingLabel by remember { mutableStateOf("Preparing Motion Wallpaper") }
                 var progressFraction by remember { mutableFloatStateOf(0f) }
                 val animatedProgress by animateFloatAsState(targetValue = progressFraction, label = "trim_progress")
 
                 val exoPlayer = remember(videoUri) {
-                    val renderersFactory = DefaultRenderersFactory(context)
-                        .setEnableDecoderFallback(true)
-                        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-                    ExoPlayer.Builder(context, renderersFactory).build().apply {
+                    WallpaperPlaybackController.createWallpaperExoPlayer(
+                        context = context,
+                        scalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+                    ).apply {
                         addListener(object : Player.Listener {
                             override fun onPlayerError(error: PlaybackException) {
                                 UHLog.e("video", "Trim preview error: ${error.message}")
-                                Toast.makeText(context, "Cannot preview video directly; transcode still supported", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    "Cannot preview video directly; conversion still supported",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
                             }
                         })
                         setMediaItem(MediaItem.fromUri(videoUri))
-                        volume = 0f
-                        repeatMode = Player.REPEAT_MODE_ONE
-                        videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                         prepare()
                         play()
                     }
                 }
 
-                // Keep playback looped cleanly inside user's selected trim range
+                // Loop playback cleanly inside user's selected trim range
                 LaunchedEffect(exoPlayer, range, isPlaying) {
                     while (isActive) {
                         val posSec = exoPlayer.currentPosition / 1000f
@@ -181,33 +180,32 @@ class TrimVideoActivity : AppCompatActivity() {
                     }
                 }
 
-                fun applyTrimAndSave() {
+                fun processAndOpenPreview(useFullVideo: Boolean) {
                     if (isProcessing) return
-                    val startSec = range.start.coerceAtLeast(0f)
-                    val clipDuration = (range.endInclusive - startSec).coerceIn(1f, 30f)
+                    val coversFullClip = useFullVideo ||
+                        (range.start <= 0.15f && (durationSec - range.endInclusive) <= 0.25f)
+
+                    val startSec = if (coversFullClip) null else range.start.coerceAtLeast(0f)
+                    val clipDuration = if (coversFullClip) null else (range.endInclusive - range.start).coerceIn(1f, 30f)
+
+                    processingLabel = when {
+                        coversFullClip && meta.isMp4 -> "Copying lossless MP4..."
+                        !coversFullClip && meta.isMp4 -> "Lossless stream-copy trim..."
+                        else -> "Converting hardware MP4 (<= 30fps)..."
+                    }
                     isProcessing = true
-                    progressFraction = 0.05f
+                    progressFraction = 0.08f
                     exoPlayer.pause()
 
                     scope.launch(Dispatchers.IO) {
-                        val ext = guessExt(videoUri)
-                        val inputFile = File(cacheDir, "trim_in_${System.currentTimeMillis()}.$ext")
-                        val outputFile = File(cacheDir, "trim_out_${System.currentTimeMillis()}.mp4")
                         try {
-                            contentResolver.openInputStream(videoUri)?.use { input ->
-                                inputFile.outputStream().use { output -> input.copyTo(output) }
-                            }
-                            val ok = WallpaperStore.transcodeToDeviceH264Mp4(
+                            val finalPath = WallpaperStore.saveLocalVideo(
                                 ctx = this@TrimVideoActivity,
-                                inputFile = inputFile,
-                                outputFile = outputFile,
+                                uri = videoUri,
                                 startSec = startSec,
                                 durationSec = clipDuration,
-                                onProgress = { pct -> progressFraction = pct }
+                                onProgress = { pct -> progressFraction = pct },
                             )
-                            val finalPath = if (ok) {
-                                WallpaperStore.saveMotionWallpaperFile(this@TrimVideoActivity, outputFile)
-                            } else null
 
                             withContext(Dispatchers.Main) {
                                 isProcessing = false
@@ -217,22 +215,27 @@ class TrimVideoActivity : AppCompatActivity() {
                                             putExtra("imagePath", finalPath)
                                             putExtra("isCustom", true)
                                             putExtra("isVideo", true)
-                                        }
+                                        },
                                     )
                                     finish()
                                 } else {
-                                    Toast.makeText(this@TrimVideoActivity, "Could not process this video", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        this@TrimVideoActivity,
+                                        "Could not process this video",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
                                 }
                             }
                         } catch (e: Exception) {
                             UHLog.e("video", "Trim process exception: ${e.message}")
                             withContext(Dispatchers.Main) {
                                 isProcessing = false
-                                Toast.makeText(this@TrimVideoActivity, "Error processing video", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    this@TrimVideoActivity,
+                                    "Error processing video",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
                             }
-                        } finally {
-                            inputFile.delete()
-                            outputFile.delete()
                         }
                     }
                 }
@@ -240,7 +243,7 @@ class TrimVideoActivity : AppCompatActivity() {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color(0xFF0A0A0E))
+                        .background(Color(0xFF0A0A0E)),
                 ) {
                     if (isLandscape) {
                         Row(
@@ -249,9 +252,8 @@ class TrimVideoActivity : AppCompatActivity() {
                                 .statusBarsPadding()
                                 .navigationBarsPadding()
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
                         ) {
-                            // Left: Video Stage
                             Box(
                                 modifier = Modifier
                                     .weight(1.3f)
@@ -261,24 +263,28 @@ class TrimVideoActivity : AppCompatActivity() {
                                     .clickable {
                                         isPlaying = !isPlaying
                                         if (isPlaying) exoPlayer.play() else exoPlayer.pause()
-                                    }
+                                    },
                             ) {
-                                VideoPreviewPlayer(exoPlayer = exoPlayer, modifier = Modifier.fillMaxSize())
+                                WallpaperVideoSurface(
+                                    exoPlayer = exoPlayer,
+                                    contentScale = ContentScale.Fit,
+                                    capTo30Fps = true,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                                 PlayPauseBadge(isPlaying = isPlaying, modifier = Modifier.align(Alignment.Center))
                                 TopBarControls(
                                     onClose = { finish() },
                                     selectedDurationSec = (range.endInclusive - range.start).coerceAtLeast(1f),
-                                    srcMeta = "${meta.width}x${meta.height}",
-                                    onConfirm = { applyTrimAndSave() },
+                                    srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "Video",
+                                    onTrimAndUse = { processAndOpenPreview(useFullVideo = false) },
                                     isProcessing = isProcessing,
                                     modifier = Modifier
                                         .align(Alignment.TopCenter)
                                         .fillMaxWidth()
-                                        .padding(10.dp)
+                                        .padding(10.dp),
                                 )
                             }
 
-                            // Right: Timeline Studio Panel
                             TrimControlsPanel(
                                 range = range,
                                 durationSec = durationSec,
@@ -286,6 +292,7 @@ class TrimVideoActivity : AppCompatActivity() {
                                 currentPlayheadSec = currentPlayheadSec,
                                 frames = frames,
                                 isPlaying = isPlaying,
+                                isMp4FastPath = meta.isMp4,
                                 onTogglePlay = {
                                     isPlaying = !isPlaying
                                     if (isPlaying) exoPlayer.play() else exoPlayer.pause()
@@ -300,28 +307,29 @@ class TrimVideoActivity : AppCompatActivity() {
                                     range = start..end
                                     exoPlayer.seekTo((start * 1000f).toLong())
                                 },
+                                onUseFullVideo = { processAndOpenPreview(useFullVideo = true) },
+                                isProcessing = isProcessing,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .fillMaxHeight()
+                                    .fillMaxHeight(),
                             )
                         }
                     } else {
-                        // Portrait Studio
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .statusBarsPadding()
-                                .navigationBarsPadding()
+                                .navigationBarsPadding(),
                         ) {
                             TopBarControls(
                                 onClose = { finish() },
                                 selectedDurationSec = (range.endInclusive - range.start).coerceAtLeast(1f),
-                                srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "MP4 Optimize",
-                                onConfirm = { applyTrimAndSave() },
+                                srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "Video",
+                                onTrimAndUse = { processAndOpenPreview(useFullVideo = false) },
                                 isProcessing = isProcessing,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
                             )
 
                             Box(
@@ -334,9 +342,14 @@ class TrimVideoActivity : AppCompatActivity() {
                                     .clickable {
                                         isPlaying = !isPlaying
                                         if (isPlaying) exoPlayer.play() else exoPlayer.pause()
-                                    }
+                                    },
                             ) {
-                                VideoPreviewPlayer(exoPlayer = exoPlayer, modifier = Modifier.fillMaxSize())
+                                WallpaperVideoSurface(
+                                    exoPlayer = exoPlayer,
+                                    contentScale = ContentScale.Fit,
+                                    capTo30Fps = true,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                                 PlayPauseBadge(isPlaying = isPlaying, modifier = Modifier.align(Alignment.Center))
                             }
 
@@ -349,6 +362,7 @@ class TrimVideoActivity : AppCompatActivity() {
                                 currentPlayheadSec = currentPlayheadSec,
                                 frames = frames,
                                 isPlaying = isPlaying,
+                                isMp4FastPath = meta.isMp4,
                                 onTogglePlay = {
                                     isPlaying = !isPlaying
                                     if (isPlaying) exoPlayer.play() else exoPlayer.pause()
@@ -363,21 +377,23 @@ class TrimVideoActivity : AppCompatActivity() {
                                     range = start..end
                                     exoPlayer.seekTo((start * 1000f).toLong())
                                 },
+                                onUseFullVideo = { processAndOpenPreview(useFullVideo = true) },
+                                isProcessing = isProcessing,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
                             )
                         }
                     }
 
-                    // Optimizing Progress Overlay
+                    // Processing Progress Overlay
                     if (isProcessing) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(Color.Black.copy(alpha = 0.72f))
                                 .clickable(enabled = false) {},
-                            contentAlignment = Alignment.Center
+                            contentAlignment = Alignment.Center,
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(22.dp),
@@ -385,39 +401,39 @@ class TrimVideoActivity : AppCompatActivity() {
                                 tonalElevation = 8.dp,
                                 modifier = Modifier
                                     .padding(24.dp)
-                                    .fillMaxWidth(if (isLandscape) 0.48f else 0.86f)
+                                    .fillMaxWidth(if (isLandscape) 0.48f else 0.86f),
                             ) {
                                 Column(
                                     modifier = Modifier.padding(22.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
+                                    horizontalAlignment = Alignment.CenterHorizontally,
                                 ) {
                                     CircularProgressIndicator(
-                                        progress = { animatedProgress.coerceIn(0.05f, 1f) },
+                                        progress = { animatedProgress.coerceIn(0.08f, 1f) },
                                         modifier = Modifier.size(44.dp),
-                                        color = MaterialTheme.colorScheme.primary
+                                        color = MaterialTheme.colorScheme.primary,
                                     )
                                     Spacer(modifier = Modifier.height(14.dp))
                                     Text(
-                                        text = "Optimizing Motion Wallpaper",
+                                        text = "Preparing Motion Wallpaper",
                                         color = Color.White,
                                         fontSize = 16.sp,
-                                        fontWeight = FontWeight.SemiBold
+                                        fontWeight = FontWeight.SemiBold,
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = "Encoding hardware H.264 MP4 (${(animatedProgress * 100).toInt()}%)",
+                                        text = "$processingLabel (${(animatedProgress * 100).toInt()}%)",
                                         color = Color.White.copy(alpha = 0.72f),
-                                        fontSize = 13.sp
+                                        fontSize = 13.sp,
                                     )
                                     Spacer(modifier = Modifier.height(14.dp))
                                     LinearProgressIndicator(
-                                        progress = { animatedProgress.coerceIn(0.05f, 1f) },
+                                        progress = { animatedProgress.coerceIn(0.08f, 1f) },
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(6.dp)
                                             .clip(RoundedCornerShape(3.dp)),
                                         color = MaterialTheme.colorScheme.primary,
-                                        trackColor = Color.White.copy(alpha = 0.14f)
+                                        trackColor = Color.White.copy(alpha = 0.14f),
                                     )
                                 }
                             }
@@ -429,32 +445,20 @@ class TrimVideoActivity : AppCompatActivity() {
     }
 
     private fun readVideoMeta(uri: Uri): VideoMeta {
+        val ext = WallpaperMediaProcessor.guessVideoExtensionFromUri(this, uri)
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(this, uri)
             val durMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
             val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            VideoMeta((durMs / 1000f).coerceAtLeast(1f), w, h)
+            val mime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE).orEmpty().lowercase()
+            val isMp4 = mime.contains("mp4") || mime.contains("m4v") || ext == "mp4" || ext == "m4v"
+            VideoMeta((durMs / 1000f).coerceAtLeast(1f), w, h, isMp4)
         } catch (_: Exception) {
-            VideoMeta(15f, 0, 0)
+            VideoMeta(15f, 0, 0, ext == "mp4" || ext == "m4v")
         } finally {
             try { retriever.release() } catch (_: Exception) {}
-        }
-    }
-
-    private fun guessExt(uri: Uri): String {
-        val mime = contentResolver.getType(uri).orEmpty().lowercase()
-        return when {
-            mime.contains("webm") -> "webm"
-            mime.contains("matroska") -> "mkv"
-            mime.contains("quicktime") -> "mov"
-            mime.contains("3gpp") -> "3gp"
-            mime.contains("avi") -> "avi"
-            else -> {
-                val p = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase().orEmpty()
-                if (p in setOf("mp4", "webm", "mkv", "mov", "avi", "3gp", "m4v")) p else "mp4"
-            }
         }
     }
 
@@ -479,19 +483,6 @@ class TrimVideoActivity : AppCompatActivity() {
 }
 
 @Composable
-private fun VideoPreviewPlayer(exoPlayer: ExoPlayer, modifier: Modifier = Modifier) {
-    AndroidView(
-        factory = { ctx ->
-            (LayoutInflater.from(ctx).inflate(R.layout.uh_wallpaper_player_view, null, false) as PlayerView).apply {
-                player = exoPlayer
-            }
-        },
-        update = { pv -> if (pv.player !== exoPlayer) pv.player = exoPlayer },
-        modifier = modifier
-    )
-}
-
-@Composable
 private fun PlayPauseBadge(isPlaying: Boolean, modifier: Modifier = Modifier) {
     if (!isPlaying) {
         Box(
@@ -500,13 +491,13 @@ private fun PlayPauseBadge(isPlaying: Boolean, modifier: Modifier = Modifier) {
                 .clip(CircleShape)
                 .background(Color.Black.copy(alpha = 0.58f))
                 .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painter = painterResource(id = R.drawable.fx_ic_play_24),
                 contentDescription = "Play",
                 tint = Color.White,
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(28.dp),
             )
         }
     }
@@ -517,60 +508,60 @@ private fun TopBarControls(
     onClose: () -> Unit,
     selectedDurationSec: Float,
     srcMeta: String,
-    onConfirm: () -> Unit,
+    onTrimAndUse: () -> Unit,
     isProcessing: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(
             onClick = onClose,
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.52f))
+                .background(Color.Black.copy(alpha = 0.52f)),
         ) {
             Icon(
                 painter = painterResource(id = R.drawable.fx_ic_close_24),
                 contentDescription = "Close",
                 tint = Color.White,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(18.dp),
             )
         }
 
         Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color.Black.copy(alpha = 0.52f)
+            color = Color.Black.copy(alpha = 0.52f),
         ) {
             Text(
                 text = "${"%.1f".format(Locale.US, selectedDurationSec)}s • $srcMeta",
                 color = Color.White,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }
 
         Button(
             enabled = !isProcessing,
-            onClick = onConfirm,
+            onClick = onTrimAndUse,
             shape = RoundedCornerShape(18.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White
+                contentColor = Color.White,
             ),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
         ) {
             Icon(
                 painter = painterResource(id = R.drawable.fx_ic_check_24),
                 contentDescription = null,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(16.dp),
             )
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Use Clip", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text("Trim & Use", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -583,46 +574,49 @@ private fun TrimControlsPanel(
     currentPlayheadSec: Float,
     frames: List<Bitmap>,
     isPlaying: Boolean,
+    isMp4FastPath: Boolean,
     onTogglePlay: () -> Unit,
     onRangeChange: (ClosedFloatingPointRange<Float>) -> Unit,
     onPresetDuration: (Float) -> Unit,
-    modifier: Modifier = Modifier
+    onUseFullVideo: () -> Unit,
+    isProcessing: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val primary = MaterialTheme.colorScheme.primary
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(20.dp),
-        color = Color(0xFF15151E)
+        color = Color(0xFF15151E),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     IconButton(
                         onClick = onTogglePlay,
                         modifier = Modifier
                             .size(34.dp)
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.1f))
+                            .background(Color.White.copy(alpha = 0.1f)),
                     ) {
                         Icon(
                             painter = painterResource(
-                                id = if (isPlaying) R.drawable.fx_ic_pause_24 else R.drawable.fx_ic_play_24
+                                id = if (isPlaying) R.drawable.fx_ic_pause_24 else R.drawable.fx_ic_play_24,
                             ),
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                     Column {
@@ -630,12 +624,16 @@ private fun TrimControlsPanel(
                             text = "${formatSec(range.start)}  —  ${formatSec(range.endInclusive)}",
                             color = Color.White,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Trim up to 30s • Optimized to H.264 60fps",
+                            text = if (isMp4FastPath) {
+                                "MP4 lossless fast-path • 30fps playback cap"
+                            } else {
+                                "Native resolution HW MP4 • Capped at 30fps"
+                            },
                             color = Color.White.copy(alpha = 0.58f),
-                            fontSize = 11.sp
+                            fontSize = 11.sp,
                         )
                     }
                 }
@@ -647,7 +645,7 @@ private fun TrimControlsPanel(
                     .fillMaxWidth()
                     .height(50.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF232330))
+                    .background(Color(0xFF232330)),
             ) {
                 if (frames.isNotEmpty()) {
                     Row(modifier = Modifier.fillMaxSize()) {
@@ -658,7 +656,7 @@ private fun TrimControlsPanel(
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .fillMaxHeight()
+                                    .fillMaxHeight(),
                             )
                         }
                     }
@@ -674,28 +672,29 @@ private fun TrimControlsPanel(
                     val endX = size.width * endFrac
                     val playX = size.width * playFrac
 
-                    // Dim excluded outer zones
                     if (startX > 0f) {
                         drawRect(Color.Black.copy(alpha = 0.62f), Offset.Zero, Size(startX, size.height))
                     }
                     if (endX < size.width) {
-                        drawRect(Color.Black.copy(alpha = 0.62f), Offset(endX, 0f), Size(size.width - endX, size.height))
+                        drawRect(
+                            Color.Black.copy(alpha = 0.62f),
+                            Offset(endX, 0f),
+                            Size(size.width - endX, size.height),
+                        )
                     }
 
-                    // Active window highlight borders
                     drawRect(
                         color = primary,
                         topLeft = Offset(startX, 0f),
                         size = Size((endX - startX).coerceAtLeast(4f), size.height),
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()),
                     )
 
-                    // Playhead line
                     drawLine(
                         color = Color.White,
                         start = Offset(playX, 0f),
                         end = Offset(playX, size.height),
-                        strokeWidth = 2.dp.toPx()
+                        strokeWidth = 2.dp.toPx(),
                     )
                 }
             }
@@ -717,14 +716,14 @@ private fun TrimControlsPanel(
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White,
                     activeTrackColor = primary,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
-                )
+                    inactiveTrackColor = Color.White.copy(alpha = 0.2f),
+                ),
             )
 
             // Quick Loop Length Chips
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 listOf(5f to "5s", 10f to "10s", 15f to "15s", 30f to "30s").forEach { (sec, label) ->
                     val enabled = durationSec >= sec - 0.5f || label == "5s"
@@ -735,21 +734,41 @@ private fun TrimControlsPanel(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = enabled) { onPresetDuration(sec) }
+                            .clickable(enabled = enabled) { onPresetDuration(sec) },
                     ) {
                         Box(
                             modifier = Modifier.padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
+                            contentAlignment = Alignment.Center,
                         ) {
                             Text(
                                 text = label,
                                 color = if (isSelected) primary else Color.White.copy(alpha = if (enabled) 0.9f else 0.35f),
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.SemiBold,
                             )
                         }
                     }
                 }
+            }
+
+            // One-tap bypass to skip trimming and import the full video losslessly
+            OutlinedButton(
+                enabled = !isProcessing,
+                onClick = onUseFullVideo,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = if (isMp4FastPath) {
+                        "Use Full Video (${formatSec(durationSec)} • Instant)"
+                    } else {
+                        "Use Full Video (${formatSec(durationSec)})"
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
     }

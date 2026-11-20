@@ -16,31 +16,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _shortcuts = MutableStateFlow(ShortcutStore.list(context))
     val shortcuts: StateFlow<List<Shortcut>> = _shortcuts
 
-    private val _wallpaperPath = MutableStateFlow(WallpaperStore.getCurrentWallpaper(context))
-    val wallpaperPath: StateFlow<String?> = _wallpaperPath
-
-    private val _isVideo = MutableStateFlow(WallpaperStore.isCurrentVideo(context))
-    val isVideo: StateFlow<Boolean> = _isVideo
-
-    private val _textColor = MutableStateFlow(WallpaperStore.getTextColor(context))
-    val textColor: StateFlow<Int> = _textColor
+    private val _wallpaperState = MutableStateFlow(WallpaperStore.wallpaperFlow(context).value)
+    val wallpaperState: StateFlow<WallpaperStore.WallpaperState> = _wallpaperState
 
     init {
         viewModelScope.launch {
             WallpaperStore.wallpaperFlow(context).collect { wp ->
-                _wallpaperPath.value = wp.path
-                _isVideo.value = wp.isVideo
-                _textColor.value = wp.textColor
+                _wallpaperState.value = wp
             }
         }
     }
 
     fun refresh() {
         _shortcuts.value = ShortcutStore.list(context)
-        val wp = WallpaperStore.wallpaperFlow(context).value
-        _wallpaperPath.value = wp.path
-        _isVideo.value = wp.isVideo
-        _textColor.value = wp.textColor
+        _wallpaperState.value = WallpaperStore.wallpaperFlow(context).value
     }
 
     fun moveShortcut(from: Int, to: Int) {

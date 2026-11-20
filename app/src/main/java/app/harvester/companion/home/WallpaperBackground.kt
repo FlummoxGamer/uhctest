@@ -1,8 +1,9 @@
 package app.harvester.companion.home
 
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.net.Uri
-import android.view.LayoutInflater
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -13,53 +14,77 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.media3.common.C
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
-import app.harvester.companion.R
 import app.harvester.companion.WallpaperStore
+import app.harvester.companion.wallpaper.WallpaperDisplayMetrics
+import app.harvester.companion.wallpaper.WallpaperPlaybackController
+import app.harvester.companion.wallpaper.WallpaperTransform
+import app.harvester.companion.wallpaper.WallpaperVideoSurface
+import app.harvester.companion.wallpaper.rememberPowerSaveMode
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
+import coil.size.Precision
 import java.io.File
 
 @Composable
 fun WallpaperBackground(
     path: String?,
     isVideo: Boolean,
-    modifier: Modifier = Modifier
+    dimAlpha: Float = 0f,
+    portraitTransform: WallpaperTransform = WallpaperTransform.Identity,
+    landscapeTransform: WallpaperTransform = WallpaperTransform.Identity,
+    isPlaybackActive: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
-    if (path == null || path == "default") return
+    if (path.isNullOrBlank() || path == "default") return
 
-    if (isVideo) {
-        VideoWallpaper(path, modifier)
-    } else {
-        ImageWallpaper(path, modifier)
+    Box(modifier = modifier.fillMaxSize().clipToBounds()) {
+        if (isVideo) {
+            VideoWallpaper(
+                path = path,
+                isPlaybackActive = isPlaybackActive,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val transform = if (isLandscape) landscapeTransform else portraitTransform
+            ImageWallpaper(
+                path = path,
+                transform = transform,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        val safeDim = dimAlpha.coerceIn(0f, WallpaperStore.MAX_DIM_ALPHA)
+        if (safeDim > 0.005f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = safeDim)),
+            )
+        }
     }
 }
 
 @Composable
-private fun ImageWallpaper(path: String, modifier: Modifier) {
+private fun ImageWallpaper(
+    path: String,
+    transform: WallpaperTransform,
+    modifier: Modifier,
+) {
     val context = LocalContext.current
-    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val transform = remember(path, isLandscape) {
-        WallpaperStore.getWallpaperTransform(context, isLandscape)
-    }
-    val zoom = transform.first.coerceIn(1f, 3f)
-    val panX = (transform.second - 0.5f).coerceIn(-0.4f, 0.4f)
-    val panY = (transform.third - 0.5f).coerceIn(-0.4f, 0.4f)
+    val clamped = remember(transform) { transform.clamped() }
 
     val model = remember(path) {
         if (path.startsWith("content://") || path.startsWith("http://") ||
@@ -70,29 +95,52 @@ private fun ImageWallpaper(path: String, modifier: Modifier) {
             File(path)
         }
     }
+
+    // Request native screen-max pixels (with zoom headroom up to safe GPU max texture edge)
+    val request = remember(context, model, clamped.scale) {
+        val (targetW, targetH) = WallpaperDisplayMetrics.getDecodeTargetSize(context, clamped.scale)
+        ImageRequest.Builder(context)
+            .data(model)
+            .size(targetW, targetH)
+            .precision(Precision.INEXACT)
+            .bitmapConfig(Bitmap.Config.ARGB_8888)
+            .allowHardware(true)
+            .crossfade(false)
+            .build()
+    }
+
     AsyncImage(
-        model = model,
+        model = request,
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
-                if (zoom > 1.01f) {
-                    scaleX = zoom
-                    scaleY = zoom
-                    translationX = -panX * size.width * (zoom - 1f)
-                    translationY = -panY * size.height * (zoom - 1f)
+                if (!clamped.isIdentity) {
+                    scaleX = clamped.scale
+                    scaleY = clamped.scale
+                    translationX = clamped.offsetXFraction * size.width
+                    translationY = clamped.offsetYFraction * size.height
                 }
-            }
+            },
     )
 }
 
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun VideoWallpaper(path: String, modifier: Modifier) {
+private fun VideoWallpaper(
+    path: String,
+    isPlaybackActive: Boolean,
+    modifier: Modifier,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val isPowerSaveMode by rememberPowerSaveMode()
+    var isLifecycleResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
     var firstFrameRendered by remember(path) { mutableStateOf(false) }
+
+    val shouldPlay = isPlaybackActive && isLifecycleResumed && !isPowerSaveMode
 
     val posterFile = remember(path) {
         WallpaperStore.posterFileFor(path).takeIf { it.exists() && it.length() > 0L }
@@ -108,36 +156,37 @@ private fun VideoWallpaper(path: String, modifier: Modifier) {
         }
     }
 
-    val exoPlayer = remember(path) {
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(1500, 8000, 250, 500)
-            .build()
-        ExoPlayer.Builder(context, renderersFactory)
-            .setLoadControl(loadControl)
-            .build()
+    val posterRequest = remember(context, path, posterFile) {
+        val (targetW, targetH) = WallpaperDisplayMetrics.getDecodeTargetSize(context, 1f)
+        val data: Any = posterFile ?: mediaUri
+        ImageRequest.Builder(context)
+            .data(data)
+            .size(targetW, targetH)
+            .precision(Precision.INEXACT)
+            .bitmapConfig(Bitmap.Config.ARGB_8888)
             .apply {
-                volume = 0f
-                repeatMode = Player.REPEAT_MODE_ONE
-                videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
-                addListener(object : Player.Listener {
-                    override fun onRenderedFirstFrame() {
-                        firstFrameRendered = true
-                    }
-                })
+                if (posterFile == null) videoFrameMillis(0L)
             }
+            .crossfade(false)
+            .build()
+    }
+
+    val exoPlayer = remember(path) {
+        WallpaperPlaybackController.createWallpaperExoPlayer(context).apply {
+            addListener(object : Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    firstFrameRendered = true
+                }
+            })
+        }
     }
 
     DisposableEffect(exoPlayer, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    exoPlayer.playWhenReady = true
-                    exoPlayer.play()
-                }
+                Lifecycle.Event.ON_RESUME -> isLifecycleResumed = true
                 Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    isLifecycleResumed = false
                     exoPlayer.pause()
                 }
                 else -> {}
@@ -155,40 +204,37 @@ private fun VideoWallpaper(path: String, modifier: Modifier) {
         firstFrameRendered = false
         exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
         exoPlayer.prepare()
-        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+    }
+
+    LaunchedEffect(exoPlayer, shouldPlay) {
+        if (shouldPlay) {
+            exoPlayer.playWhenReady = true
             exoPlayer.play()
+        } else {
+            exoPlayer.playWhenReady = false
+            exoPlayer.pause()
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Show instant cached poster or first frame underneath until TextureView paints frame 1
-        if (!firstFrameRendered) {
-            val thumbModel: Any = posterFile ?: remember(path) {
-                ImageRequest.Builder(context)
-                    .data(mediaUri)
-                    .videoFrameMillis(0L)
-                    .build()
-            }
+        // Always hold crisp full-res poster underneath so Battery Saver / off-screen pause
+        // and first-frame startup never flash black.
+        if (!firstFrameRendered || isPowerSaveMode || !shouldPlay) {
             AsyncImage(
-                model = thumbModel,
+                model = posterRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
             )
         }
 
-        AndroidView(
-            factory = { ctx ->
-                (LayoutInflater.from(ctx).inflate(R.layout.uh_wallpaper_player_view, null, false) as PlayerView).apply {
-                    player = exoPlayer
-                }
-            },
-            update = { playerView ->
-                if (playerView.player !== exoPlayer) {
-                    playerView.player = exoPlayer
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+        if (!isPowerSaveMode) {
+            WallpaperVideoSurface(
+                exoPlayer = exoPlayer,
+                contentScale = ContentScale.Crop,
+                capTo30Fps = true,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
