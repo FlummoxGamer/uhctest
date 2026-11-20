@@ -36,19 +36,25 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import app.harvester.companion.R
 import app.harvester.companion.WallpaperStore
-import app.harvester.companion.wallpaper.HomeWallpaperTile
 import app.harvester.companion.wallpaper.WallpaperCatalog
-import app.harvester.companion.wallpaper.WallpaperState
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import java.io.File
 
+sealed class HomeWallpaperTile {
+    data object Add : HomeWallpaperTile()
+    data object Default : HomeWallpaperTile()
+    data class Custom(val path: String) : HomeWallpaperTile()
+    data class Motion(val path: String) : HomeWallpaperTile()
+    data class Remote(val url: String, val isVideo: Boolean) : HomeWallpaperTile()
+}
+
 @Composable
 fun WallpaperTileGrid(
     tiles: List<HomeWallpaperTile>,
     columns: Int = 4,
-    wallpaperState: WallpaperState,
+    wallpaperState: WallpaperStore.WallpaperState,
     onTileClick: (HomeWallpaperTile) -> Unit,
     onSetFromMenu: (String) -> Unit,
     onDeleteFromMenu: (String) -> Unit,
@@ -82,7 +88,7 @@ fun WallpaperTileGrid(
 @Composable
 private fun WallpaperGridTile(
     tile: HomeWallpaperTile,
-    wallpaperState: WallpaperState,
+    wallpaperState: WallpaperStore.WallpaperState,
     onClick: () -> Unit,
     onSetFromMenu: (String) -> Unit,
     onDeleteFromMenu: (String) -> Unit,
@@ -98,10 +104,10 @@ private fun WallpaperGridTile(
     }
 
     val isActive = when (tile) {
-        is HomeWallpaperTile.Default -> !wallpaperState.hasCustomWallpaper
+        is HomeWallpaperTile.Default -> activePath == "default" || activePath.isBlank()
         is HomeWallpaperTile.Custom -> tile.path == activePath
         is HomeWallpaperTile.Motion -> tile.path == activePath
-        is HomeWallpaperTile.Remote -> WallpaperStore.isRemoteUrlActive(wallpaperState, tile.url)
+        is HomeWallpaperTile.Remote -> WallpaperStore.isRemoteUrlActive(context, tile.url, wallpaperState)
         is HomeWallpaperTile.Add -> false
     }
 
