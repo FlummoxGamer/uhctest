@@ -72,42 +72,59 @@ class CustomizeHomeActivity : AppCompatActivity() {
                 }
                 var showResetConfirm by remember { mutableStateOf(false) }
                 var isImportingImage by remember { mutableStateOf(false) }
+                var showGallerySheet by remember { mutableStateOf(false) }
 
-                // Full-screen Android system document/media picker: avoids the half-height
-                // Photo Picker scroll-lock bug across OEMs, needs zero extra permissions,
-                // and delivers raw untouched original image & video files.
-                val pickMedia = rememberLauncherForActivityResult(
-                    ActivityResultContracts.OpenDocument()
-                ) { uri ->
-                    if (uri != null) {
-                        val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
-                        val isVideo = mime.startsWith("video/") ||
+                fun handleSelectedMedia(uri: android.net.Uri, knownVideo: Boolean? = null) {
+                    val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
+                    val isVideo = knownVideo ?: (
+                        mime.startsWith("video/") ||
                             WallpaperStore.isVideoFileOrUrl(uri.toString())
-                        if (isVideo) {
-                            context.startActivity(
-                                Intent(context, TrimVideoActivity::class.java)
-                                    .putExtra("videoUri", uri.toString())
-                            )
-                        } else {
-                            isImportingImage = true
-                            scope.launch(Dispatchers.IO) {
-                                val localPath = WallpaperStore.saveWallpaper(context, uri)
-                                withContext(Dispatchers.Main) {
-                                    isImportingImage = false
-                                    if (localPath != null) {
-                                        context.startActivity(
-                                            Intent(context, WallpaperPreviewActivity::class.java).apply {
-                                                putExtra("imagePath", localPath)
-                                                putExtra("isCustom", true)
-                                            }
-                                        )
-                                    } else {
-                                        Toast.makeText(context, "Failed to import wallpaper", Toast.LENGTH_SHORT).show()
-                                    }
+                        )
+                    if (isVideo) {
+                        context.startActivity(
+                            Intent(context, TrimVideoActivity::class.java)
+                                .putExtra("videoUri", uri.toString())
+                        )
+                    } else {
+                        isImportingImage = true
+                        scope.launch(Dispatchers.IO) {
+                            val localPath = WallpaperStore.saveWallpaper(context, uri)
+                            withContext(Dispatchers.Main) {
+                                isImportingImage = false
+                                if (localPath != null) {
+                                    context.startActivity(
+                                        Intent(context, WallpaperPreviewActivity::class.java).apply {
+                                            putExtra("imagePath", localPath)
+                                            putExtra("isCustom", true)
+                                        }
+                                    )
+                                } else {
+                                    Toast.makeText(context, "Failed to import wallpaper", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
                     }
+                }
+
+                // Fallback external file picker invoked from the Gallery Sheet's "Browse Files" button
+                val pickMedia = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument()
+                ) { uri ->
+                    if (uri != null) {
+                        handleSelectedMedia(uri)
+                    }
+                }
+
+                if (showGallerySheet) {
+                    GalleryPickerSheet(
+                        onDismiss = { showGallerySheet = false },
+                        onMediaSelected = { uri, isVideo ->
+                            handleSelectedMedia(uri, knownVideo = isVideo)
+                        },
+                        onBrowseFiles = {
+                            pickMedia.launch(arrayOf("image/*", "video/*"))
+                        },
+                    )
                 }
 
                 if (isImportingImage) {
@@ -207,7 +224,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                         onTileClick = { tile ->
                             when (tile) {
                                 is HomeWallpaperTile.Add -> {
-                                    pickMedia.launch(arrayOf("image/*", "video/*"))
+                                    showGallerySheet = true
                                 }
                                 is HomeWallpaperTile.Default -> {
                                     WallpaperStore.setCurrentWallpaper(context, "default", 0, false)

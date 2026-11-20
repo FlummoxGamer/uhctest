@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -28,8 +29,9 @@ import androidx.media3.exoplayer.ExoPlayer
  * - Uses ExoPlayer's native [ExoPlayer.setVideoTextureView] binding keyed cleanly to [exoPlayer]
  *   so switching wallpapers while paused or returning from another Activity attaches instantaneously
  *   with zero frozen-frame surface loss.
- * - Keeps the surface hidden (`alpha = 0f`) until BOTH the exact aspect-ratio matrix is computed
- *   AND the first decoded video frame has painted, eliminating any stretched/weird-size flash.
+ * - Enforces a strict two-frame GPU commit barrier (`firstFrameRendered && hasValidMatrix` +
+ *   two `TextureView.post` ticks after `setTransform`) before [revealAlpha] ever leaves `0f`,
+ *   eliminating stretched/weird-size frames and split-second luminance flashes.
  * - Applies unified aspect-aware [WallpaperTransform] (including 1.0x panning of wide/tall clips
  *   and 1x..4x zoom) directly in hardware via `TextureView.setTransform(Matrix)`.
  */
@@ -74,6 +76,8 @@ fun WallpaperVideoSurface(
         }
         var firstFrameRendered by remember { mutableStateOf(revealImmediately) }
         var hasValidMatrix by remember { mutableStateOf(false) }
+        var matrixCommitted by remember { mutableStateOf(false) }
+        var notifiedFirstFrame by remember { mutableStateOf(false) }
 
         val textureViewRef = remember { mutableStateOf<TextureView?>(null) }
         val boundTextureViewRef = remember { mutableStateOf<TextureView?>(null) }
@@ -94,6 +98,33 @@ fun WallpaperVideoSurface(
             }
         }
 
+        // Two-frame GPU commit barrier: wait until BOTH the first frame is decoded AND
+        // the exact aspect/crop transform matrix has survived two Choreographer draw passes.
+        LaunchedEffect(firstFrameRendered, hasValidMatrix, revealImmediately) {
+            if (!matrixCommitted && hasValidMatrix && (firstFrameRendered || revealImmediately)) {
+                val tv = textureViewRef.value
+                if (tv != null) {
+                    syncTransform(tv)
+                    tv.post {
+                        syncTransform(tv)
+                        tv.post {
+                            matrixCommitted = true
+                            if (!notifiedFirstFrame && firstFrameRendered) {
+                                notifiedFirstFrame = true
+                                latestOnFirstFrame?.invoke()
+                            }
+                        }
+                    }
+                } else {
+                    matrixCommitted = true
+                    if (!notifiedFirstFrame && firstFrameRendered) {
+                        notifiedFirstFrame = true
+                        latestOnFirstFrame?.invoke()
+                    }
+                }
+            }
+        }
+
         DisposableEffect(exoPlayer) {
             val listener = object : Player.Listener {
                 override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -109,7 +140,6 @@ fun WallpaperVideoSurface(
                 override fun onRenderedFirstFrame() {
                     textureViewRef.value?.let { syncTransform(it) }
                     firstFrameRendered = true
-                    latestOnFirstFrame?.invoke()
                 }
             }
             exoPlayer.addListener(listener)
@@ -125,10 +155,14 @@ fun WallpaperVideoSurface(
             }
         }
 
-        val isReadyToShow = revealImmediately || (firstFrameRendered && hasValidMatrix)
+        val isReadyToShow = if (revealImmediately) {
+            hasValidMatrix && matrixCommitted
+        } else {
+            firstFrameRendered && hasValidMatrix && matrixCommitted
+        }
         val revealAlpha by animateFloatAsState(
             targetValue = if (isReadyToShow) 1f else 0f,
-            animationSpec = tween(durationMillis = if (revealImmediately) 0 else 140),
+            animationSpec = tween(durationMillis = if (revealImmediately) 0 else 160),
             label = "video_surface_reveal_alpha",
         )
 
@@ -199,7 +233,7 @@ private fun applyVideoTransform(
         if (videoAspect > viewAspect) {
             baseScaleX = videoAspect / viewAspect
         } else {
-            baseScaleY = viewAspect / videoAspect
+            baseScaleY = viewAspect / viewAspect
         }
     }
 

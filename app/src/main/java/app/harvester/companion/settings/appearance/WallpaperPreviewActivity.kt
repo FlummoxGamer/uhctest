@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -158,11 +159,13 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                 val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
                 val shortcuts = remember { ShortcutStore.list(context).take(8) }
                 val storedState by WallpaperStore.wallpaperFlow(context).collectAsState()
+                val activeDownloads by WallpaperMediaCache.downloadProgress.collectAsState()
 
                 val pagerState = rememberPagerState(initialPage = initialIndex) { uris.size }
                 val previewDominantColors = remember { mutableStateMapOf<Int, Int>() }
                 val pageTransforms = remember { mutableStateMapOf<Int, WallpaperTransform>() }
                 val pageMediaAspects = remember { mutableStateMapOf<Int, Float>() }
+                val pageImageLoading = remember { mutableStateMapOf<Int, Boolean>() }
                 var viewportSize by remember { mutableStateOf(IntSize.Zero) }
 
                 // Seed transform & dim slider if previewing the currently active wallpaper
@@ -184,6 +187,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                 }
                 var showHomeOverlay by remember { mutableStateOf(true) }
                 var isGesturing by remember { mutableStateOf(false) }
+                // 0 = idle, 1 = Setting up..., 2 = Downloading...
                 var isApplying by remember { mutableIntStateOf(0) }
 
                 val currentPage = pagerState.currentPage.coerceIn(0, (uris.size - 1).coerceAtLeast(0))
@@ -207,6 +211,24 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                     animationSpec = tween(durationMillis = 200),
                     label = "home_overlay_alpha",
                 )
+
+                // Keep Dim + Pan/Pinch dock stacked cleanly ABOVE the bottom mock Address Bar
+                val dockBottomPadding by animateDpAsState(
+                    targetValue = if (showHomeOverlay) 72.dp else 14.dp,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "dock_bottom_clearance",
+                )
+
+                // Live download status for compact floating pill
+                val currentUrlHash = remember(currentItem) {
+                    if (currentItem.startsWith("http")) WallpaperMediaCache.urlHash(currentItem) else null
+                }
+                val videoDownloadProgress = currentUrlHash?.let { activeDownloads[it] }
+                val isCurrentImageDownloading = !currentIsVideo &&
+                    currentItem.startsWith("http") &&
+                    (pageImageLoading[currentPage] == true)
+                val showDownloadPill = !isGesturing && isApplying == 0 &&
+                    (videoDownloadProgress != null || isCurrentImageDownloading)
 
                 fun nudgeTransform(dxFrac: Float, dyFrac: Float) {
                     val base = pageTransforms[currentPage] ?: WallpaperTransform.Identity
@@ -256,66 +278,253 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                             onMediaAspectResolved = { aspect ->
                                 if (aspect > 0.01f) pageMediaAspects[page] = aspect
                             },
+                            onImageLoadingChanged = { loading ->
+                                pageImageLoading[page] = loading
+                            },
                             onTransformChange = { updated -> pageTransforms[page] = updated },
                             onInteractionChanged = { active -> isGesturing = active },
                             onDetectedDominantColor = { dom -> previewDominantColors[page] = dom },
                         )
                     }
 
-                    // Top Floating Controls Bar
-                    Row(
+                    // Top Floating Controls Bar + Compact Download Indicator Pill
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
                             .padding(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            IconButton(
-                                onClick = { finish() },
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.48f))
-                                    .border(0.6.dp, Color.White.copy(alpha = 0.16f), CircleShape),
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.fx_ic_close_24),
-                                    contentDescription = "Close preview",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-
-                            Surface(
-                                shape = CircleShape,
-                                color = if (showHomeOverlay) {
-                                    Color.Black.copy(alpha = 0.48f)
-                                } else {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                                },
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .border(0.6.dp, Color.White.copy(alpha = 0.16f), CircleShape)
-                                    .clickable { showHomeOverlay = !showHomeOverlay },
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                IconButton(
+                                    onClick = { finish() },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.48f))
+                                        .border(0.6.dp, Color.White.copy(alpha = 0.16f), CircleShape),
                                 ) {
                                     Icon(
-                                        painter = painterResource(id = R.drawable.ic_image_frame),
-                                        contentDescription = "Toggle Home preview overlay",
+                                        painter = painterResource(id = R.drawable.fx_ic_close_24),
+                                        contentDescription = "Close preview",
                                         tint = Color.White,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (showHomeOverlay) {
+                                        Color.Black.copy(alpha = 0.48f)
+                                    } else {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                    },
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .border(0.6.dp, Color.White.copy(alpha = 0.16f), CircleShape)
+                                        .clickable { showHomeOverlay = !showHomeOverlay },
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = R.drawable.ic_image_frame),
+                                            contentDescription = "Toggle Home preview overlay",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Text(
+                                            text = if (showHomeOverlay) "Hide UI" else "Show UI",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
+                                }
+                            }
+
+                            Button(
+                                enabled = isApplying == 0,
+                                onClick = {
+                                    if (currentPage !in uris.indices) return@Button
+                                    val selectedUri = uris[currentPage]
+                                    if (selectedUri == "default") {
+                                        WallpaperStore.setCurrentWallpaper(context, "default", 0, false)
+                                        finish()
+                                        return@Button
+                                    }
+
+                                    val isVideo = currentIsVideo
+                                    val transformToSave = (pageTransforms[currentPage] ?: WallpaperTransform.Identity)
+                                        .clampedForAspect(currentMediaAspect, viewAspect)
+                                    val appliedDim = dimAlpha.coerceIn(0f, WallpaperStore.MAX_DIM_ALPHA)
+                                    val isRemote = selectedUri.startsWith("http")
+                                    val alreadyAvailableLocally = !isRemote ||
+                                        WallpaperStore.hasSavedRemoteWallpaper(context, selectedUri) ||
+                                        WallpaperMediaCache.isRemoteAssetCached(context, selectedUri, isVideo)
+
+                                    // Show "Setting up..." when cached/local; only "Downloading..." if genuinely transferring
+                                    isApplying = if (alreadyAvailableLocally) 1 else 2
+
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            var finalPath = selectedUri
+                                            if (isRemote) {
+                                                val downloaded = WallpaperStore.downloadAndPrepareWallpaper(
+                                                    ctx = context,
+                                                    rawUrl = selectedUri,
+                                                    onStageChanged = { downloading ->
+                                                        scope.launch(Dispatchers.Main) {
+                                                            if (isApplying != 0) {
+                                                                isApplying = if (downloading) 2 else 1
+                                                            }
+                                                        }
+                                                    },
+                                                )
+                                                if (downloaded == null) {
+                                                    withContext(Dispatchers.Main) {
+                                                        isApplying = 0
+                                                        Toast.makeText(context, "Failed to download wallpaper", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                    return@launch
+                                                }
+                                                finalPath = downloaded
+                                            }
+
+                                            withContext(Dispatchers.Main) {
+                                                if (isApplying != 0) isApplying = 1
+                                            }
+
+                                            val resolvedIsVideo = isVideo || WallpaperStore.isVideoFileOrUrl(finalPath)
+                                            val clipStartMs = if (resolvedIsVideo) {
+                                                WallpaperStore.getVideoClipBounds(context, finalPath)?.startMs ?: 0L
+                                            } else 0L
+
+                                            val bitmap = if (resolvedIsVideo) {
+                                                val poster = WallpaperStore.posterFileFor(finalPath)
+                                                if (poster.exists()) {
+                                                    WallpaperStore.getSampledBitmap(poster.absolutePath, 240, 420)
+                                                } else {
+                                                    WallpaperStore.generateVideoThumbnail(finalPath, clipStartMs)
+                                                }
+                                            } else {
+                                                WallpaperStore.getSampledBitmap(finalPath, 240, 420)
+                                            }
+
+                                            val textColor = if (bitmap != null) {
+                                                val palette = Palette.from(bitmap).generate()
+                                                val rawDom = palette.getDominantColor(AndroidColor.DKGRAY)
+                                                val blended = if (appliedDim > 0.01f) {
+                                                    ColorUtils.blendARGB(rawDom, AndroidColor.BLACK, appliedDim)
+                                                } else rawDom
+                                                val lum = ColorUtils.calculateLuminance(blended)
+                                                bitmap.recycle()
+                                                if (lum > 0.5) AndroidColor.BLACK else AndroidColor.WHITE
+                                            } else {
+                                                AndroidColor.WHITE
+                                            }
+
+                                            withContext(Dispatchers.Main) {
+                                                val switchingWallpaper = storedState.path != finalPath
+                                                if (switchingWallpaper) {
+                                                    WallpaperStore.resetWallpaperTransforms(context)
+                                                }
+                                                WallpaperStore.setWallpaperTransform(context, isLandscape, transformToSave)
+                                                WallpaperStore.setCurrentWallpaper(
+                                                    ctx = context,
+                                                    path = finalPath,
+                                                    textColor = textColor,
+                                                    isVideo = resolvedIsVideo,
+                                                    sourceUrl = if (isRemote) selectedUri else null,
+                                                    dimAlpha = appliedDim,
+                                                )
+                                                finish()
+                                            }
+                                        } catch (e: Exception) {
+                                            UHLog.e("wallpaper_error", "Preview apply failed: ${e.message}")
+                                            withContext(Dispatchers.Main) {
+                                                isApplying = 0
+                                                Toast.makeText(context, "Could not apply wallpaper", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(18.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp),
+                            ) {
+                                if (isApplying != 0) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isApplying == 2) "Downloading..." else "Setting up...",
+                                        fontSize = 13.sp,
+                                    )
+                                } else {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.fx_ic_check_24),
+                                        contentDescription = null,
                                         modifier = Modifier.size(16.dp),
                                     )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Set Wallpaper", fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        // Compact Floating Download Progress Pill (for remote wallpapers)
+                        AnimatedVisibility(
+                            visible = showDownloadPill,
+                            enter = fadeIn(tween(150)),
+                            exit = fadeOut(tween(180)),
+                        ) {
+                            val pctText = if (videoDownloadProgress != null && videoDownloadProgress >= 0f) {
+                                "Downloading ${(videoDownloadProgress * 100f).roundToInt().coerceIn(0, 100)}%"
+                            } else {
+                                "Downloading..."
+                            }
+                            Surface(
+                                shape = CircleShape,
+                                color = Color.Black.copy(alpha = 0.62f),
+                                modifier = Modifier
+                                    .padding(top = 10.dp)
+                                    .border(0.6.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    if (videoDownloadProgress != null && videoDownloadProgress >= 0f) {
+                                        CircularProgressIndicator(
+                                            progress = { videoDownloadProgress.coerceIn(0f, 1f) },
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color.White,
+                                            trackColor = Color.White.copy(alpha = 0.25f),
+                                        )
+                                    } else {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color.White,
+                                        )
+                                    }
                                     Text(
-                                        text = if (showHomeOverlay) "Hide UI" else "Show UI",
+                                        text = pctText,
                                         color = Color.White,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
@@ -323,121 +532,9 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                 }
                             }
                         }
-
-                        Button(
-                            enabled = isApplying == 0,
-                            onClick = {
-                                if (currentPage !in uris.indices) return@Button
-                                val selectedUri = uris[currentPage]
-                                if (selectedUri == "default") {
-                                    WallpaperStore.setCurrentWallpaper(context, "default", 0, false)
-                                    finish()
-                                    return@Button
-                                }
-
-                                val isVideo = currentIsVideo
-                                val transformToSave = (pageTransforms[currentPage] ?: WallpaperTransform.Identity)
-                                    .clampedForAspect(currentMediaAspect, viewAspect)
-                                val appliedDim = dimAlpha.coerceIn(0f, WallpaperStore.MAX_DIM_ALPHA)
-                                val isRemote = selectedUri.startsWith("http")
-                                isApplying = if (isRemote) 2 else 1
-
-                                scope.launch(Dispatchers.IO) {
-                                    try {
-                                        var finalPath = selectedUri
-                                        if (isRemote) {
-                                            val downloaded = WallpaperStore.downloadAndPrepareWallpaper(context, selectedUri)
-                                            if (downloaded == null) {
-                                                withContext(Dispatchers.Main) {
-                                                    isApplying = 0
-                                                    Toast.makeText(context, "Failed to download wallpaper", Toast.LENGTH_SHORT).show()
-                                                }
-                                                return@launch
-                                            }
-                                            finalPath = downloaded
-                                        }
-
-                                        val resolvedIsVideo = isVideo || WallpaperStore.isVideoFileOrUrl(finalPath)
-                                        val clipStartMs = if (resolvedIsVideo) {
-                                            WallpaperStore.getVideoClipBounds(context, finalPath)?.startMs ?: 0L
-                                        } else 0L
-
-                                        val bitmap = if (resolvedIsVideo) {
-                                            val poster = WallpaperStore.posterFileFor(finalPath)
-                                            if (poster.exists()) {
-                                                WallpaperStore.getSampledBitmap(poster.absolutePath, 240, 420)
-                                            } else {
-                                                WallpaperStore.generateVideoThumbnail(finalPath, clipStartMs)
-                                            }
-                                        } else {
-                                            WallpaperStore.getSampledBitmap(finalPath, 240, 420)
-                                        }
-
-                                        val textColor = if (bitmap != null) {
-                                            val palette = Palette.from(bitmap).generate()
-                                            val rawDom = palette.getDominantColor(AndroidColor.DKGRAY)
-                                            val blended = if (appliedDim > 0.01f) {
-                                                ColorUtils.blendARGB(rawDom, AndroidColor.BLACK, appliedDim)
-                                            } else rawDom
-                                            val lum = ColorUtils.calculateLuminance(blended)
-                                            bitmap.recycle()
-                                            if (lum > 0.5) AndroidColor.BLACK else AndroidColor.WHITE
-                                        } else {
-                                            AndroidColor.WHITE
-                                        }
-
-                                        withContext(Dispatchers.Main) {
-                                            val switchingWallpaper = storedState.path != finalPath
-                                            if (switchingWallpaper) {
-                                                WallpaperStore.resetWallpaperTransforms(context)
-                                            }
-                                            WallpaperStore.setWallpaperTransform(context, isLandscape, transformToSave)
-                                            WallpaperStore.setCurrentWallpaper(
-                                                ctx = context,
-                                                path = finalPath,
-                                                textColor = textColor,
-                                                isVideo = resolvedIsVideo,
-                                                sourceUrl = if (isRemote) selectedUri else null,
-                                                dimAlpha = appliedDim,
-                                            )
-                                            finish()
-                                        }
-                                    } catch (e: Exception) {
-                                        UHLog.e("wallpaper_error", "Preview apply failed: ${e.message}")
-                                        withContext(Dispatchers.Main) {
-                                            isApplying = 0
-                                            Toast.makeText(context, "Could not apply wallpaper", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            },
-                            shape = RoundedCornerShape(18.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp),
-                        ) {
-                            if (isApplying != 0) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isApplying == 2) "Downloading..." else "Applying...",
-                                    fontSize = 13.sp,
-                                )
-                            } else {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.fx_ic_check_24),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Set Wallpaper", fontSize = 13.sp)
-                            }
-                        }
                     }
 
-                    // Bottom Floating Framing Nudge & Dim Control Dock (works for BOTH photos & videos)
+                    // Bottom Floating Framing Nudge & Dim Control Dock (stacked cleanly ABOVE Address Bar)
                     if (currentItem != "default") {
                         val canPanX = maxFracX > 0.02f
                         val canPanY = maxFracY > 0.02f
@@ -448,7 +545,7 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                                .padding(start = 16.dp, end = 16.dp, bottom = dockBottomPadding),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
@@ -649,6 +746,7 @@ private fun WallpaperPreviewPage(
     transform: WallpaperTransform,
     mediaAspect: Float,
     onMediaAspectResolved: (Float) -> Unit,
+    onImageLoadingChanged: (Boolean) -> Unit,
     onTransformChange: (WallpaperTransform) -> Unit,
     onInteractionChanged: (Boolean) -> Unit,
     onDetectedDominantColor: (Int) -> Unit,
@@ -690,8 +788,12 @@ private fun WallpaperPreviewPage(
                 }
             }
             else -> {
+                val isRemoteImage = item.startsWith("http")
                 val resolvedUrl = remember(item) {
-                    if (item.startsWith("http")) WallpaperCatalog.fullResolutionUrl(context, item) else item
+                    if (isRemoteImage) WallpaperCatalog.fullResolutionUrl(context, item) else item
+                }
+                val thumbUrl = remember(item) {
+                    if (isRemoteImage) WallpaperCatalog.thumbnailUrl(item) else null
                 }
                 val imageModel: Any = remember(resolvedUrl) {
                     if (resolvedUrl.startsWith("http")) resolvedUrl else File(resolvedUrl)
@@ -716,6 +818,17 @@ private fun WallpaperPreviewPage(
                         }
                         if (aspect > 0.01f) onMediaAspectResolved(aspect)
                         onDetectedDominantColor(dom)
+                        onImageLoadingChanged(false)
+                    }
+                }
+
+                val thumbRequest = remember(context, thumbUrl) {
+                    thumbUrl?.let {
+                        ImageRequest.Builder(context)
+                            .data(it)
+                            .size(480, 720)
+                            .crossfade(false)
+                            .build()
                     }
                 }
 
@@ -727,7 +840,7 @@ private fun WallpaperPreviewPage(
                         .precision(Precision.INEXACT)
                         .bitmapConfig(Bitmap.Config.ARGB_8888)
                         .allowHardware(true)
-                        .crossfade(true)
+                        .crossfade(if (isRemoteImage) 160 else 0)
                         .build()
                 }
 
@@ -739,18 +852,46 @@ private fun WallpaperPreviewPage(
                     onInteractionChanged = onInteractionChanged,
                     modifier = Modifier.fillMaxSize(),
                 ) { _ ->
-                    AsyncImage(
-                        model = imageRequest,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        onSuccess = { state ->
-                            val d = state.result.drawable
-                            if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
-                                onMediaAspectResolved(d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat())
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // Instant 0ms base layer using the already-cached gallery thumbnail
+                        if (thumbRequest != null) {
+                            AsyncImage(
+                                model = thumbRequest,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                onSuccess = { state ->
+                                    if (mediaAspect <= 0.01f) {
+                                        val d = state.result.drawable
+                                        if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                                            onMediaAspectResolved(d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat())
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+
+                        // Full-resolution sharp layer fading cleanly in on top
+                        AsyncImage(
+                            model = imageRequest,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            onLoading = {
+                                if (isRemoteImage) onImageLoadingChanged(true)
+                            },
+                            onSuccess = { state ->
+                                onImageLoadingChanged(false)
+                                val d = state.result.drawable
+                                if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                                    onMediaAspectResolved(d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat())
+                                }
+                            },
+                            onError = {
+                                onImageLoadingChanged(false)
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         }
@@ -764,7 +905,7 @@ private fun WallpaperPreviewPage(
             )
         }
 
-        // Home Layout Preview Overlay
+        // Home Layout Preview Overlay (Address Bar anchored cleanly at true bottom)
         if (overlayAlpha > 0.01f) {
             Column(
                 modifier = Modifier
@@ -772,8 +913,7 @@ private fun WallpaperPreviewPage(
                     .alpha(overlayAlpha)
                     .statusBarsPadding()
                     .navigationBarsPadding()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = if (item != "default") 116.dp else 0.dp),
+                    .padding(horizontal = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (isLandscape) {
@@ -837,10 +977,11 @@ private fun WallpaperPreviewPage(
                     Spacer(modifier = Modifier.weight(1f))
                 }
 
+                // Mock Home Address Bar anchored at the very bottom (Dim + Pan/Pinch stack above it)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 10.dp)
+                        .padding(bottom = 12.dp)
                         .height(44.dp)
                         .clip(RoundedCornerShape(22.dp))
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
@@ -866,12 +1007,13 @@ private fun WallpaperPreviewPage(
 }
 
 /**
- * Flash-free, single-active-page motion preview layer:
- * - Pre-probes local video dimensions so the aspect matrix is ready before frame 1.
- * - Renders pixel-aligned center-cropped poster immediately underneath (matching the tile's
- *   Coil cache key for remote catalog clips so opening Preview never flashes blank or stretched).
- * - Uses [SeamlessVideoWallpaperPlayer] when [isPageActive] is true for butter-smooth playback
- *   and crossfade loop preview with live zoom & 1.0x panning.
+ * Seizure-safe, zero-flash motion preview layer:
+ * - Uses the persistent local WebP thumbnail (`WallpaperMediaCache.getCachedMotionThumb`)
+ *   or local poster file immediately at 0ms underneath, and NEVER unmounts it while the video
+ *   fades in on top — guaranteeing constant luminance with zero blank/dark flash.
+ * - Keeps the poster sizing stable (`fillMaxSize()` + `ContentScale.Crop` at identity, and
+ *   identical crop geometry when zoomed/panned) so there is zero size jump when metadata arrives.
+ * - Uses [SeamlessVideoWallpaperPlayer] with the two-frame GPU matrix commit gate when active.
  */
 @Composable
 private fun PreviewVideoLayer(
@@ -885,19 +1027,26 @@ private fun PreviewVideoLayer(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    var firstFrameRendered by remember(item, isPageActive) { mutableStateOf(false) }
     var probe by remember(item) { mutableStateOf<WallpaperMediaProcessor.VideoProbe?>(null) }
 
     val cachedLocalFile = remember(item, isPageActive) {
         if (item.startsWith("http")) WallpaperMediaCache.getCachedVideoFile(context, item) else null
     }
-    val posterFile = remember(item) {
+    var remoteThumbFile by remember(item) {
+        mutableStateOf(
+            if (item.startsWith("http")) WallpaperMediaCache.getCachedMotionThumb(context, item) else null,
+        )
+    }
+    val localPosterFile = remember(item) {
         if (!item.startsWith("http")) {
             WallpaperStore.posterFileFor(item).takeIf { it.exists() && it.length() > 0L }
         } else null
     }
 
     LaunchedEffect(item, cachedLocalFile) {
+        if (item.startsWith("http") && remoteThumbFile == null) {
+            remoteThumbFile = WallpaperMediaCache.getOrExtractMotionThumb(context, item)
+        }
         val localPath = when {
             !item.startsWith("http") -> item
             cachedLocalFile != null -> cachedLocalFile.absolutePath
@@ -916,18 +1065,22 @@ private fun PreviewVideoLayer(
         }
     }
 
+    val posterFile = localPosterFile ?: remoteThumbFile
     val posterRequest = remember(context, item, posterFile, cachedLocalFile, clipBounds) {
-        val data: Any = posterFile ?: cachedLocalFile ?: if (item.startsWith("http")) item else File(item)
-        ImageRequest.Builder(context)
-            .data(data)
-            .apply {
-                if (posterFile == null) {
-                    val frameMs = if (item.startsWith("http")) 500L else (clipBounds?.startMs ?: 0L)
-                    videoFrameMillis(frameMs)
+        val data: Any? = posterFile
+            ?: cachedLocalFile
+            ?: if (!item.startsWith("http")) File(item) else null
+        data?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .apply {
+                    if (posterFile == null) {
+                        videoFrameMillis(clipBounds?.startMs ?: 0L)
+                    }
                 }
-            }
-            .crossfade(false)
-            .build()
+                .crossfade(false)
+                .build()
+        }
     }
 
     BoxWithConstraints(
@@ -939,10 +1092,11 @@ private fun PreviewVideoLayer(
         val viewAspect = if (viewW > 0f && viewH > 0f) viewW / viewH else 0f
         val effectiveAspect = mediaAspect.takeIf { it > 0.01f } ?: (probe?.aspectRatio ?: 0f)
 
-        if (!isPageActive || !firstFrameRendered) {
-            val (cropX, cropY) = WallpaperTransform.computeCropFactors(effectiveAspect, viewAspect)
-            val exact = transform.clampedForAspect(effectiveAspect, viewAspect)
-            val posterModifier = if (viewW > 0f && viewH > 0f && effectiveAspect > 0.01f) {
+        // Permanent base poster layer (never unmounts during video reveal -> zero black flash)
+        if (posterRequest != null) {
+            val posterModifier = if (!transform.isIdentity && viewW > 0f && viewH > 0f && effectiveAspect > 0.01f) {
+                val (cropX, cropY) = WallpaperTransform.computeCropFactors(effectiveAspect, viewAspect)
+                val exact = transform.clampedForAspect(effectiveAspect, viewAspect)
                 val contentW = with(density) { (viewW * cropX).toDp() }
                 val contentH = with(density) { (viewH * cropY).toDp() }
                 Modifier
@@ -994,21 +1148,8 @@ private fun PreviewVideoLayer(
                 onVideoAspectResolved = { aspect ->
                     if (aspect > 0.01f) onAspectResolved(aspect)
                 },
-                onFirstFrameRendered = {
-                    firstFrameRendered = true
-                },
                 modifier = Modifier.fillMaxSize(),
             )
-
-            if (!firstFrameRendered && item.startsWith("http") && cachedLocalFile == null) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(32.dp),
-                    strokeWidth = 2.5.dp,
-                    color = Color.White,
-                )
-            }
         }
     }
 }

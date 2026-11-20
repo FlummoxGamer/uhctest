@@ -318,7 +318,11 @@ object WallpaperStore {
      * Downloads or promotes a cached remote wallpaper at maximum screen resolution without
      * lossy re-compression or video re-encoding.
      */
-    suspend fun downloadAndPrepareWallpaper(ctx: Context, rawUrl: String): String? =
+    suspend fun downloadAndPrepareWallpaper(
+        ctx: Context,
+        rawUrl: String,
+        onStageChanged: ((isDownloading: Boolean) -> Unit)? = null,
+    ): String? =
         withContext(Dispatchers.IO) {
             try {
                 val resolvedUrl = WallpaperCatalog.fullResolutionUrl(ctx, rawUrl)
@@ -327,6 +331,7 @@ object WallpaperStore {
 
                 // 1. Reuse already-saved wallpaper in permanent storage if present
                 findExistingByHash(dir, hash)?.let { existing ->
+                    onStageChanged?.invoke(false)
                     existing.setLastModified(System.currentTimeMillis())
                     prependToRecentOrder(ctx, existing.name)
                     if (isVideoFileOrUrl(existing.absolutePath)) {
@@ -337,8 +342,11 @@ object WallpaperStore {
 
                 val expectVideo = isVideoFileOrUrl(rawUrl)
                 if (expectVideo) {
+                    val alreadyCached = WallpaperMediaCache.getCachedVideoFile(ctx, resolvedUrl) != null
+                    onStageChanged?.invoke(!alreadyCached)
                     val cachedVideo = WallpaperMediaCache.getOrDownloadVideo(ctx, resolvedUrl)
                         ?: return@withContext null
+                    onStageChanged?.invoke(false)
                     val finalVideo = WallpaperMediaProcessor.finalizeRemoteVideoVerbatim(
                         srcFile = cachedVideo,
                         destDir = dir,
@@ -358,9 +366,13 @@ object WallpaperStore {
                 val tmpImage = File(ctx.cacheDir, "wp_dl_${hash}_${System.currentTimeMillis()}.tmp")
                 val promotedFromCache = WallpaperMediaCache.tryExportCoilCachedImage(ctx, resolvedUrl, tmpImage)
                 val ready = if (promotedFromCache) {
+                    onStageChanged?.invoke(false)
                     true
                 } else {
-                    WallpaperMediaCache.downloadToFile(resolvedUrl, tmpImage)
+                    onStageChanged?.invoke(true)
+                    val ok = WallpaperMediaCache.downloadToFile(resolvedUrl, tmpImage)
+                    onStageChanged?.invoke(false)
+                    ok
                 }
 
                 if (!ready || !tmpImage.exists() || tmpImage.length() < 64L) {
@@ -404,6 +416,11 @@ object WallpaperStore {
                 null
             }
         }
+
+    fun hasSavedRemoteWallpaper(ctx: Context, rawUrl: String): Boolean {
+        val hash = WallpaperMediaCache.urlHash(rawUrl)
+        return findExistingByHash(getWallpaperDir(ctx), hash) != null
+    }
 
     private fun findExistingByHash(dir: File, hash: String): File? {
         return dir.listFiles { f ->

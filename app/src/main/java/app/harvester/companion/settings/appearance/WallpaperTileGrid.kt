@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import app.harvester.companion.R
 import app.harvester.companion.WallpaperStore
 import app.harvester.companion.wallpaper.WallpaperCatalog
+import app.harvester.companion.wallpaper.WallpaperMediaCache
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
@@ -182,7 +184,7 @@ fun WallpaperGridTile(
                     ImageRequest.Builder(context)
                         .data(model)
                         .size(480, 720)
-                        .crossfade(true)
+                        .crossfade(false)
                         .build()
                 }
                 AsyncImage(
@@ -207,7 +209,7 @@ fun WallpaperGridTile(
                         .apply {
                             if (!hasPoster) videoFrameMillis(0L)
                         }
-                        .crossfade(true)
+                        .crossfade(false)
                         .build()
                 }
                 AsyncImage(
@@ -219,28 +221,67 @@ fun WallpaperGridTile(
                 )
             }
             is HomeWallpaperTile.Remote -> {
-                val displayUrl = remember(tile.url, tile.isVideo) {
-                    if (tile.isVideo) tile.url else WallpaperCatalog.thumbnailUrl(tile.url)
-                }
-                val req = remember(displayUrl, tile.isVideo) {
-                    ImageRequest.Builder(context)
-                        .data(displayUrl)
-                        .size(480, 720)
-                        .apply {
-                            if (tile.isVideo) videoFrameMillis(500L)
+                if (tile.isVideo) {
+                    // Persistent local WebP thumbnail stored once in filesDir/wallpaper_thumbs
+                    var cachedThumb by remember(tile.url) {
+                        mutableStateOf(WallpaperMediaCache.getCachedMotionThumb(context, tile.url))
+                    }
+                    LaunchedEffect(tile.url) {
+                        if (cachedThumb == null) {
+                            cachedThumb = WallpaperMediaCache.getOrExtractMotionThumb(context, tile.url)
                         }
-                        .crossfade(true)
-                        .build()
+                    }
+
+                    val thumbFile = cachedThumb
+                    if (thumbFile != null) {
+                        val req = remember(thumbFile.absolutePath) {
+                            ImageRequest.Builder(context)
+                                .data(thumbFile)
+                                .size(480, 720)
+                                .crossfade(false)
+                                .build()
+                        }
+                        AsyncImage(
+                            model = req,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            error = painterResource(id = R.drawable.fx_ic_video_24),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.fx_ic_video_24),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+                } else {
+                    val displayUrl = remember(tile.url) {
+                        WallpaperCatalog.thumbnailUrl(tile.url)
+                    }
+                    val req = remember(displayUrl) {
+                        ImageRequest.Builder(context)
+                            .data(displayUrl)
+                            .size(480, 720)
+                            .crossfade(true)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = req,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        error = painterResource(id = R.drawable.fx_ic_appearance_24),
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
-                AsyncImage(
-                    model = req,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    error = painterResource(
-                        id = if (tile.isVideo) R.drawable.fx_ic_video_24 else R.drawable.fx_ic_appearance_24,
-                    ),
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
         }
 
@@ -290,9 +331,11 @@ fun WallpaperGridTile(
                     internalMenuExpanded = false
                     onExternalMenuDismiss?.invoke()
                 },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
                 DropdownMenuItem(
-                    text = { Text("Set as Wallpaper") },
+                    text = { Text("Set Wallpaper") },
                     onClick = {
                         internalMenuExpanded = false
                         onExternalMenuDismiss?.invoke()
