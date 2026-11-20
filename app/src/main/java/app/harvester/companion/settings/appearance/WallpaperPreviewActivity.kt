@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -46,7 +48,6 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -61,12 +62,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -74,13 +80,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.WindowCompat
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
 import androidx.palette.graphics.Palette
 import app.harvester.companion.R
 import app.harvester.companion.Shortcut
@@ -90,12 +94,13 @@ import app.harvester.companion.UHLog
 import app.harvester.companion.WallpaperStore
 import app.harvester.companion.home.ShortcutIcon
 import app.harvester.companion.theme.UHTheme
+import app.harvester.companion.wallpaper.SeamlessVideoWallpaperPlayer
+import app.harvester.companion.wallpaper.VideoClipBounds
 import app.harvester.companion.wallpaper.WallpaperCatalog
 import app.harvester.companion.wallpaper.WallpaperDisplayMetrics
 import app.harvester.companion.wallpaper.WallpaperMediaCache
-import app.harvester.companion.wallpaper.WallpaperPlaybackController
+import app.harvester.companion.wallpaper.WallpaperMediaProcessor
 import app.harvester.companion.wallpaper.WallpaperTransform
-import app.harvester.companion.wallpaper.WallpaperVideoSurface
 import app.harvester.companion.wallpaper.WallpaperZoomableViewport
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -157,6 +162,8 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                 val pagerState = rememberPagerState(initialPage = initialIndex) { uris.size }
                 val previewDominantColors = remember { mutableStateMapOf<Int, Int>() }
                 val pageTransforms = remember { mutableStateMapOf<Int, WallpaperTransform>() }
+                val pageMediaAspects = remember { mutableStateMapOf<Int, Float>() }
+                var viewportSize by remember { mutableStateOf(IntSize.Zero) }
 
                 // Seed transform & dim slider if previewing the currently active wallpaper
                 val initialIsCurrent = remember(initialKey, storedState.path, storedState.sourceUrl) {
@@ -185,6 +192,15 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                     (forceVideo && !isCustom) ||
                     (forceVideo && currentPage == initialIndex)
                 val currentTransform = pageTransforms[currentPage] ?: WallpaperTransform.Identity
+                val currentMediaAspect = pageMediaAspects[currentPage] ?: 0f
+                val viewAspect = if (viewportSize.width > 0 && viewportSize.height > 0) {
+                    viewportSize.width.toFloat() / viewportSize.height.toFloat()
+                } else 0f
+                val (maxFracX, maxFracY) = WallpaperTransform.computeMaxPanFractions(
+                    scale = currentTransform.scale,
+                    mediaAspect = currentMediaAspect,
+                    viewportAspect = viewAspect,
+                )
 
                 val overlayAlpha by animateFloatAsState(
                     targetValue = if (showHomeOverlay && !isGesturing) 1f else 0f,
@@ -192,10 +208,20 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                     label = "home_overlay_alpha",
                 )
 
+                fun nudgeTransform(dxFrac: Float, dyFrac: Float) {
+                    val base = pageTransforms[currentPage] ?: WallpaperTransform.Identity
+                    val updated = base.copy(
+                        offsetXFraction = (base.offsetXFraction + dxFrac).coerceIn(-maxFracX, maxFracX),
+                        offsetYFraction = (base.offsetYFraction + dyFrac).coerceIn(-maxFracY, maxFracY),
+                    ).clampedForAspect(currentMediaAspect, viewAspect)
+                    pageTransforms[currentPage] = updated
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background),
+                        .background(MaterialTheme.colorScheme.background)
+                        .onSizeChanged { viewportSize = it },
                 ) {
                     HorizontalPager(
                         state = pagerState,
@@ -226,6 +252,10 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                             shortcuts = shortcuts,
                             titleColorInt = titleColorInt,
                             transform = pageTransforms[page] ?: WallpaperTransform.Identity,
+                            mediaAspect = pageMediaAspects[page] ?: 0f,
+                            onMediaAspectResolved = { aspect ->
+                                if (aspect > 0.01f) pageMediaAspects[page] = aspect
+                            },
                             onTransformChange = { updated -> pageTransforms[page] = updated },
                             onInteractionChanged = { active -> isGesturing = active },
                             onDetectedDominantColor = { dom -> previewDominantColors[page] = dom },
@@ -261,7 +291,6 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                 )
                             }
 
-                            // Toggle Home Overlay visibility so user can inspect pure framing
                             Surface(
                                 shape = CircleShape,
                                 color = if (showHomeOverlay) {
@@ -307,11 +336,8 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                 }
 
                                 val isVideo = currentIsVideo
-                                val transformToSave = if (isVideo) {
-                                    WallpaperTransform.Identity
-                                } else {
-                                    (pageTransforms[currentPage] ?: WallpaperTransform.Identity).clamped()
-                                }
+                                val transformToSave = (pageTransforms[currentPage] ?: WallpaperTransform.Identity)
+                                    .clampedForAspect(currentMediaAspect, viewAspect)
                                 val appliedDim = dimAlpha.coerceIn(0f, WallpaperStore.MAX_DIM_ALPHA)
                                 val isRemote = selectedUri.startsWith("http")
                                 isApplying = if (isRemote) 2 else 1
@@ -332,12 +358,16 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                         }
 
                                         val resolvedIsVideo = isVideo || WallpaperStore.isVideoFileOrUrl(finalPath)
+                                        val clipStartMs = if (resolvedIsVideo) {
+                                            WallpaperStore.getVideoClipBounds(context, finalPath)?.startMs ?: 0L
+                                        } else 0L
+
                                         val bitmap = if (resolvedIsVideo) {
                                             val poster = WallpaperStore.posterFileFor(finalPath)
                                             if (poster.exists()) {
                                                 WallpaperStore.getSampledBitmap(poster.absolutePath, 240, 420)
                                             } else {
-                                                WallpaperStore.generateVideoThumbnail(finalPath)
+                                                WallpaperStore.generateVideoThumbnail(finalPath, clipStartMs)
                                             }
                                         } else {
                                             WallpaperStore.getSampledBitmap(finalPath, 240, 420)
@@ -357,11 +387,11 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                         }
 
                                         withContext(Dispatchers.Main) {
-                                            if (resolvedIsVideo) {
+                                            val switchingWallpaper = storedState.path != finalPath
+                                            if (switchingWallpaper) {
                                                 WallpaperStore.resetWallpaperTransforms(context)
-                                            } else {
-                                                WallpaperStore.setWallpaperTransform(context, isLandscape, transformToSave)
                                             }
+                                            WallpaperStore.setWallpaperTransform(context, isLandscape, transformToSave)
                                             WallpaperStore.setCurrentWallpaper(
                                                 ctx = context,
                                                 path = finalPath,
@@ -407,8 +437,12 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Bottom Floating Framing & Dim Control Dock (hidden for default theme)
+                    // Bottom Floating Framing Nudge & Dim Control Dock (works for BOTH photos & videos)
                     if (currentItem != "default") {
+                        val canPanX = maxFracX > 0.02f
+                        val canPanY = maxFracY > 0.02f
+                        val showFramingPill = !isGesturing && (canPanX || canPanY || !currentTransform.isIdentity)
+
                         Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
@@ -418,15 +452,22 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            // Live Zoom Indicator + Reset Crop Pill (only visible for images when zoomed/panned)
+                            // Directional Pan Nudge + Zoom/Reset Framing Pill (both Photos & Videos)
                             AnimatedVisibility(
-                                visible = !currentIsVideo && !currentTransform.isIdentity,
+                                visible = showFramingPill,
                                 enter = fadeIn(tween(160)),
                                 exit = fadeOut(tween(160)),
                             ) {
+                                val stepX = (maxFracX * 0.35f).coerceIn(0.14f, 0.45f)
+                                val stepY = (maxFracY * 0.35f).coerceIn(0.14f, 0.45f)
+                                val canGoLeft = canPanX && currentTransform.offsetXFraction < maxFracX - 0.01f
+                                val canGoRight = canPanX && currentTransform.offsetXFraction > -maxFracX + 0.01f
+                                val canGoUp = canPanY && currentTransform.offsetYFraction < maxFracY - 0.01f
+                                val canGoDown = canPanY && currentTransform.offsetYFraction > -maxFracY + 0.01f
+
                                 Surface(
                                     shape = CircleShape,
-                                    color = Color.Black.copy(alpha = 0.56f),
+                                    color = Color.Black.copy(alpha = 0.58f),
                                     modifier = Modifier.border(
                                         0.6.dp,
                                         Color.White.copy(alpha = 0.18f),
@@ -434,30 +475,79 @@ class WallpaperPreviewActivity : AppCompatActivity() {
                                     ),
                                 ) {
                                     Row(
-                                        modifier = Modifier
-                                            .clickable { pageTransforms[currentPage] = WallpaperTransform.Identity }
-                                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                                     ) {
-                                        Text(
-                                            text = "${"%.2f".format(Locale.US, currentTransform.scale)}x",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                        Icon(
-                                            painter = painterResource(id = R.drawable.ac_ic_arrow_counter_clockwise_24),
-                                            contentDescription = "Reset framing",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(14.dp),
-                                        )
-                                        Text(
-                                            text = "Reset",
-                                            color = Color.White.copy(alpha = 0.9f),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        )
+                                        if (canPanX) {
+                                            PanNudgeButton(
+                                                rotationDegrees = 180f,
+                                                enabled = canGoLeft,
+                                                contentDescription = "Pan left",
+                                                onClick = { nudgeTransform(stepX, 0f) },
+                                            )
+                                        }
+                                        if (canPanY) {
+                                            PanNudgeButton(
+                                                rotationDegrees = -90f,
+                                                enabled = canGoUp,
+                                                contentDescription = "Pan up",
+                                                onClick = { nudgeTransform(0f, stepY) },
+                                            )
+                                            PanNudgeButton(
+                                                rotationDegrees = 90f,
+                                                enabled = canGoDown,
+                                                contentDescription = "Pan down",
+                                                onClick = { nudgeTransform(0f, -stepY) },
+                                            )
+                                        }
+
+                                        if (!currentTransform.isIdentity) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .clip(CircleShape)
+                                                    .clickable { pageTransforms[currentPage] = WallpaperTransform.Identity }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            ) {
+                                                Text(
+                                                    text = "${"%.2f".format(Locale.US, currentTransform.scale)}x",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                                Icon(
+                                                    painter = painterResource(id = R.drawable.ac_ic_arrow_counter_clockwise_24),
+                                                    contentDescription = "Reset framing",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                                Text(
+                                                    text = "Reset",
+                                                    color = Color.White.copy(alpha = 0.9f),
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Pan / Pinch",
+                                                color = Color.White.copy(alpha = 0.84f),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 8.dp),
+                                            )
+                                        }
+
+                                        if (canPanX) {
+                                            PanNudgeButton(
+                                                rotationDegrees = 0f,
+                                                enabled = canGoRight,
+                                                contentDescription = "Pan right",
+                                                onClick = { nudgeTransform(-stepX, 0f) },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -524,6 +614,29 @@ class WallpaperPreviewActivity : AppCompatActivity() {
 }
 
 @Composable
+private fun PanNudgeButton(
+    rotationDegrees: Float,
+    enabled: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(32.dp),
+    ) {
+        Icon(
+            painter = painterResource(id = R.drawable.fx_ic_chevron_right_24),
+            contentDescription = contentDescription,
+            tint = Color.White.copy(alpha = if (enabled) 0.95f else 0.28f),
+            modifier = Modifier
+                .size(18.dp)
+                .rotate(rotationDegrees),
+        )
+    }
+}
+
+@Composable
 private fun WallpaperPreviewPage(
     item: String,
     isVideo: Boolean,
@@ -534,6 +647,8 @@ private fun WallpaperPreviewPage(
     shortcuts: List<Shortcut>,
     titleColorInt: Int,
     transform: WallpaperTransform,
+    mediaAspect: Float,
+    onMediaAspectResolved: (Float) -> Unit,
     onTransformChange: (WallpaperTransform) -> Unit,
     onInteractionChanged: (Boolean) -> Unit,
     onDetectedDominantColor: (Int) -> Unit,
@@ -552,11 +667,27 @@ private fun WallpaperPreviewPage(
                 )
             }
             isVideo -> {
-                PreviewVideoLayer(
-                    item = item,
-                    isPageActive = isPageActive,
+                val clipBounds = remember(item) {
+                    if (!item.startsWith("http")) WallpaperStore.getVideoClipBounds(context, item) else null
+                }
+                WallpaperZoomableViewport(
+                    transform = transform,
+                    mediaAspectRatio = mediaAspect,
+                    applyGraphicsLayerToContent = false,
+                    onTransformChange = onTransformChange,
+                    onInteractionChanged = onInteractionChanged,
                     modifier = Modifier.fillMaxSize(),
-                )
+                ) { liveTransform ->
+                    PreviewVideoLayer(
+                        item = item,
+                        clipBounds = clipBounds,
+                        isPageActive = isPageActive,
+                        transform = liveTransform,
+                        mediaAspect = mediaAspect,
+                        onAspectResolved = onMediaAspectResolved,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             else -> {
                 val resolvedUrl = remember(item) {
@@ -566,21 +697,24 @@ private fun WallpaperPreviewPage(
                     if (resolvedUrl.startsWith("http")) resolvedUrl else File(resolvedUrl)
                 }
 
-                // Sample dominant color on IO thread without disabling hardware bitmaps in Preview
+                // Resolve intrinsic aspect ratio + dominant color for local files on IO thread
                 LaunchedEffect(resolvedUrl) {
                     if (!resolvedUrl.startsWith("http")) {
-                        val dom = withContext(Dispatchers.IO) {
-                            try {
+                        val (aspect, dom) = withContext(Dispatchers.IO) {
+                            val a = WallpaperMediaProcessor.getImageAspectRatio(resolvedUrl)
+                            val c = try {
                                 val bmp = WallpaperStore.getSampledBitmap(resolvedUrl, 160, 280)
                                 if (bmp != null) {
-                                    val c = Palette.from(bmp).generate().getDominantColor(AndroidColor.DKGRAY)
+                                    val color = Palette.from(bmp).generate().getDominantColor(AndroidColor.DKGRAY)
                                     bmp.recycle()
-                                    c
+                                    color
                                 } else AndroidColor.DKGRAY
                             } catch (_: Exception) {
                                 AndroidColor.DKGRAY
                             }
+                            a to c
                         }
+                        if (aspect > 0.01f) onMediaAspectResolved(aspect)
                         onDetectedDominantColor(dom)
                     }
                 }
@@ -599,14 +733,22 @@ private fun WallpaperPreviewPage(
 
                 WallpaperZoomableViewport(
                     transform = transform,
+                    mediaAspectRatio = mediaAspect,
+                    applyGraphicsLayerToContent = true,
                     onTransformChange = onTransformChange,
                     onInteractionChanged = onInteractionChanged,
                     modifier = Modifier.fillMaxSize(),
-                ) {
+                ) { _ ->
                     AsyncImage(
                         model = imageRequest,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
+                        onSuccess = { state ->
+                            val d = state.result.drawable
+                            if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                                onMediaAspectResolved(d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat())
+                            }
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -631,7 +773,7 @@ private fun WallpaperPreviewPage(
                     .statusBarsPadding()
                     .navigationBarsPadding()
                     .padding(horizontal = 20.dp)
-                    .padding(bottom = if (item != "default") 74.dp else 0.dp),
+                    .padding(bottom = if (item != "default") 116.dp else 0.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (isLandscape) {
@@ -724,19 +866,27 @@ private fun WallpaperPreviewPage(
 }
 
 /**
- * Single-active-player video preview layer:
- * - Only instantiates and plays an ExoPlayer when [isPageActive] is true.
- * - Off-screen pager pages display crisp posters with zero active hardware decoders.
- * - Prefetches remote motion URLs into [WallpaperMediaCache] so Apply skips redundant downloads.
+ * Flash-free, single-active-page motion preview layer:
+ * - Pre-probes local video dimensions so the aspect matrix is ready before frame 1.
+ * - Renders pixel-aligned center-cropped poster immediately underneath (matching the tile's
+ *   Coil cache key for remote catalog clips so opening Preview never flashes blank or stretched).
+ * - Uses [SeamlessVideoWallpaperPlayer] when [isPageActive] is true for butter-smooth playback
+ *   and crossfade loop preview with live zoom & 1.0x panning.
  */
 @Composable
 private fun PreviewVideoLayer(
     item: String,
+    clipBounds: VideoClipBounds?,
     isPageActive: Boolean,
+    transform: WallpaperTransform,
+    mediaAspect: Float,
+    onAspectResolved: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     var firstFrameRendered by remember(item, isPageActive) { mutableStateOf(false) }
+    var probe by remember(item) { mutableStateOf<WallpaperMediaProcessor.VideoProbe?>(null) }
 
     val cachedLocalFile = remember(item, isPageActive) {
         if (item.startsWith("http")) WallpaperMediaCache.getCachedVideoFile(context, item) else null
@@ -747,31 +897,79 @@ private fun PreviewVideoLayer(
         } else null
     }
 
-    // Background single-flight prefetch when user lands on a remote video page
+    LaunchedEffect(item, cachedLocalFile) {
+        val localPath = when {
+            !item.startsWith("http") -> item
+            cachedLocalFile != null -> cachedLocalFile.absolutePath
+            else -> null
+        }
+        if (localPath != null) {
+            val p = withContext(Dispatchers.IO) { WallpaperMediaProcessor.probeVideo(localPath) }
+            probe = p
+            if (p.aspectRatio > 0.01f) onAspectResolved(p.aspectRatio)
+        }
+    }
+
     LaunchedEffect(item, isPageActive) {
         if (isPageActive && item.startsWith("http")) {
             WallpaperMediaCache.prefetchVideoAsync(context, item)
         }
     }
 
-    val posterRequest = remember(context, item, posterFile, cachedLocalFile) {
+    val posterRequest = remember(context, item, posterFile, cachedLocalFile, clipBounds) {
         val data: Any = posterFile ?: cachedLocalFile ?: if (item.startsWith("http")) item else File(item)
         ImageRequest.Builder(context)
             .data(data)
             .apply {
-                if (posterFile == null) videoFrameMillis(0L)
+                if (posterFile == null) {
+                    val frameMs = if (item.startsWith("http")) 500L else (clipBounds?.startMs ?: 0L)
+                    videoFrameMillis(frameMs)
+                }
             }
             .crossfade(false)
             .build()
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        contentAlignment = Alignment.Center,
+        modifier = modifier.fillMaxSize().clipToBounds(),
+    ) {
+        val viewW = constraints.maxWidth.toFloat()
+        val viewH = constraints.maxHeight.toFloat()
+        val viewAspect = if (viewW > 0f && viewH > 0f) viewW / viewH else 0f
+        val effectiveAspect = mediaAspect.takeIf { it > 0.01f } ?: (probe?.aspectRatio ?: 0f)
+
         if (!isPageActive || !firstFrameRendered) {
+            val (cropX, cropY) = WallpaperTransform.computeCropFactors(effectiveAspect, viewAspect)
+            val exact = transform.clampedForAspect(effectiveAspect, viewAspect)
+            val posterModifier = if (viewW > 0f && viewH > 0f && effectiveAspect > 0.01f) {
+                val contentW = with(density) { (viewW * cropX).toDp() }
+                val contentH = with(density) { (viewH * cropY).toDp() }
+                Modifier
+                    .requiredSize(contentW, contentH)
+                    .graphicsLayer {
+                        scaleX = exact.scale
+                        scaleY = exact.scale
+                        translationX = exact.offsetXFraction * viewW
+                        translationY = exact.offsetYFraction * viewH
+                    }
+            } else {
+                Modifier.fillMaxSize()
+            }
+
             AsyncImage(
                 model = posterRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+                onSuccess = { state ->
+                    if (effectiveAspect <= 0.01f) {
+                        val d = state.result.drawable
+                        if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                            onAspectResolved(d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat())
+                        }
+                    }
+                },
+                modifier = posterModifier,
             )
         }
 
@@ -784,38 +982,25 @@ private fun PreviewVideoLayer(
                 }
             }
 
-            val exoPlayer = remember(item) {
-                WallpaperPlaybackController.createWallpaperExoPlayer(context).apply {
-                    setMediaItem(MediaItem.fromUri(mediaUri))
-                    addListener(object : Player.Listener {
-                        override fun onRenderedFirstFrame() {
-                            firstFrameRendered = true
-                        }
-
-                        override fun onPlayerError(error: PlaybackException) {
-                            UHLog.e("video", "ExoPlayer Preview Error: ${error.message}")
-                        }
-                    })
-                    prepare()
-                    play()
-                }
-            }
-
-            DisposableEffect(exoPlayer) {
-                onDispose {
-                    exoPlayer.stop()
-                    exoPlayer.release()
-                }
-            }
-
-            WallpaperVideoSurface(
-                exoPlayer = exoPlayer,
-                contentScale = ContentScale.Crop,
-                capTo30Fps = true,
+            SeamlessVideoWallpaperPlayer(
+                mediaUri = mediaUri,
+                clipBounds = clipBounds,
+                isPlaying = true,
+                transform = transform,
+                initialVideoWidth = probe?.width ?: 0,
+                initialVideoHeight = probe?.height ?: 0,
+                initialRotationDegrees = probe?.rotationDegrees ?: 0,
+                enableCrossfadeLoop = true,
+                onVideoAspectResolved = { aspect ->
+                    if (aspect > 0.01f) onAspectResolved(aspect)
+                },
+                onFirstFrameRendered = {
+                    firstFrameRendered = true
+                },
                 modifier = Modifier.fillMaxSize(),
             )
 
-            if (!firstFrameRendered && item.startsWith("http")) {
+            if (!firstFrameRendered && item.startsWith("http") && cachedLocalFile == null) {
                 CircularProgressIndicator(
                     modifier = Modifier
                         .align(Alignment.Center)

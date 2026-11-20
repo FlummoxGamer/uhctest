@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Arrangement
@@ -74,8 +73,11 @@ class CustomizeHomeActivity : AppCompatActivity() {
                 var showResetConfirm by remember { mutableStateOf(false) }
                 var isImportingImage by remember { mutableStateOf(false) }
 
+                // Full-screen Android system document/media picker: avoids the half-height
+                // Photo Picker scroll-lock bug across OEMs, needs zero extra permissions,
+                // and delivers raw untouched original image & video files.
                 val pickMedia = rememberLauncherForActivityResult(
-                    ActivityResultContracts.PickVisualMedia()
+                    ActivityResultContracts.OpenDocument()
                 ) { uri ->
                     if (uri != null) {
                         val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
@@ -205,9 +207,7 @@ class CustomizeHomeActivity : AppCompatActivity() {
                         onTileClick = { tile ->
                             when (tile) {
                                 is HomeWallpaperTile.Add -> {
-                                    pickMedia.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                    )
+                                    pickMedia.launch(arrayOf("image/*", "video/*"))
                                 }
                                 is HomeWallpaperTile.Default -> {
                                     WallpaperStore.setCurrentWallpaper(context, "default", 0, false)

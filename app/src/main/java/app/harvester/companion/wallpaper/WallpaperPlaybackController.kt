@@ -4,9 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
+import android.net.Uri
 import android.os.PowerManager
-import android.view.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
@@ -16,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -23,34 +23,27 @@ import androidx.media3.exoplayer.ExoPlayer
 
 /**
  * Playback & power-management utilities for motion wallpapers:
- * - Always muted and configured with `handleAudioFocus = false` so background music/podcasts never pause.
+ * - Always silent with audio & text tracks disabled in TrackSelectionParameters (zero audio-clock
+ *   sync jitter and zero audio-focus stealing so music/podcasts keep playing).
+ * - Native frame cadence without artificial 30fps pulldown override so playback stays butter-smooth
+ *   across 60Hz/90Hz/120Hz displays.
+ * - Non-destructive MediaItem.ClippingConfiguration support for trimmed clips.
  * - Real-time Battery Saver observer (`PowerManager.isPowerSaveMode`).
- * - Hardware Surface 30fps pacing cap on Android 11+ so skipped high-fps MP4s remain smooth and battery-friendly.
  */
 object WallpaperPlaybackController {
-
-    const val TARGET_MAX_FPS = 30f
-
-    fun isPowerSaveMode(context: Context): Boolean {
-        return try {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            pm?.isPowerSaveMode == true
-        } catch (_: Exception) {
-            false
-        }
-    }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun createWallpaperExoPlayer(
         context: Context,
         scalingMode: Int = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
+        repeatOne: Boolean = true,
     ): ExoPlayer {
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 1500,
-                /* maxBufferMs = */ 8000,
+                /* minBufferMs = */ 4000,
+                /* maxBufferMs = */ 15000,
                 /* bufferForPlaybackMs = */ 250,
                 /* bufferForPlaybackAfterRebufferMs = */ 500,
             )
@@ -63,31 +56,38 @@ object WallpaperPlaybackController {
             .build()
             .apply {
                 volume = 0f
-                repeatMode = Player.REPEAT_MODE_ONE
+                repeatMode = if (repeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 videoScalingMode = scalingMode
+                trackSelectionParameters = trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
             }
     }
 
     /**
-     * Caps Surface presentation pacing to 30fps on Android 11+ (API 30+) without re-encoding
-     * the underlying MP4 stream. Keeps high-fps wallpapers smooth and power-efficient.
+     * Builds an ExoPlayer [MediaItem], applying non-destructive [clipBounds] when trimmed.
      */
-    fun apply30FpsSurfaceCap(surface: Surface) {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                surface.setFrameRate(
-                    TARGET_MAX_FPS,
-                    Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
-                    Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS,
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                surface.setFrameRate(
-                    TARGET_MAX_FPS,
-                    Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
-                )
-            }
+    fun buildMediaItem(uri: Uri, clipBounds: VideoClipBounds? = null): MediaItem {
+        val builder = MediaItem.Builder().setUri(uri)
+        if (clipBounds != null && clipBounds.isValid) {
+            builder.setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(clipBounds.startMs.coerceAtLeast(0L))
+                    .setEndPositionMs(clipBounds.endMs)
+                    .build()
+            )
+        }
+        return builder.build()
+    }
+
+    fun isPowerSaveMode(context: Context): Boolean {
+        return try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isPowerSaveMode == true
         } catch (_: Exception) {
-            // Gracefully ignored on devices whose compositor does not support setFrameRate
+            false
         }
     }
 }

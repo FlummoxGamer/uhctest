@@ -31,8 +31,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +44,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RangeSlider
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -77,25 +80,28 @@ import app.harvester.companion.R
 import app.harvester.companion.UHLog
 import app.harvester.companion.WallpaperStore
 import app.harvester.companion.theme.UHTheme
-import app.harvester.companion.wallpaper.WallpaperMediaProcessor
 import app.harvester.companion.wallpaper.WallpaperPlaybackController
 import app.harvester.companion.wallpaper.WallpaperVideoSurface
-import com.arthenica.ffmpegkit.FFmpegKitConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.min
 
 class TrimVideoActivity : AppCompatActivity() {
+
+    private companion object {
+        const val MAX_CLIP_DURATION_SEC = 30f
+    }
 
     private data class VideoMeta(
         val durationSec: Float,
         val width: Int,
         val height: Int,
-        val isMp4: Boolean,
+        val rotationDegrees: Int,
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -121,14 +127,27 @@ class TrimVideoActivity : AppCompatActivity() {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-                val maxClipWindow = min(durationSec, 30f)
 
-                var range by remember { mutableStateOf(0f..min(durationSec, 15f)) }
+                // Always keep the fine trim bar at most 30 seconds wide so handles never squeeze
+                // on long (e.g., 1-hour) videos; show a separate timeline window scrubber when > 30s.
+                val isLongVideo = durationSec > MAX_CLIP_DURATION_SEC + 0.05f
+                val windowSpanSec = min(durationSec, MAX_CLIP_DURATION_SEC)
+                val maxWindowStartSec = (durationSec - windowSpanSec).coerceAtLeast(0f)
+
+                var windowStartSec by remember { mutableFloatStateOf(0f) }
+                var localRange by remember { mutableStateOf(0f..min(windowSpanSec, 15f)) }
+
+                val absStartSec = (windowStartSec + localRange.start).coerceIn(0f, durationSec)
+                val absEndSec = (windowStartSec + localRange.endInclusive).coerceIn(
+                    min(durationSec, absStartSec + 1f),
+                    durationSec,
+                )
+
                 var frames by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
                 var isPlaying by remember { mutableStateOf(true) }
                 var currentPlayheadSec by remember { mutableFloatStateOf(0f) }
                 var isProcessing by remember { mutableStateOf(false) }
-                var processingLabel by remember { mutableStateOf("Preparing Motion Wallpaper") }
+                var processingLabel by remember { mutableStateOf("Cutting lossless clip...") }
                 var progressFraction by remember { mutableFloatStateOf(0f) }
                 val animatedProgress by animateFloatAsState(targetValue = progressFraction, label = "trim_progress")
 
@@ -142,7 +161,7 @@ class TrimVideoActivity : AppCompatActivity() {
                                 UHLog.e("video", "Trim preview error: ${error.message}")
                                 Toast.makeText(
                                     context,
-                                    "Cannot preview video directly; conversion still supported",
+                                    "Could not preview this video format",
                                     Toast.LENGTH_SHORT,
                                 ).show()
                             }
@@ -153,15 +172,15 @@ class TrimVideoActivity : AppCompatActivity() {
                     }
                 }
 
-                // Loop playback cleanly inside user's selected trim range
-                LaunchedEffect(exoPlayer, range, isPlaying) {
+                // Loop playback strictly inside the selected [absStartSec..absEndSec] slice
+                LaunchedEffect(exoPlayer, absStartSec, absEndSec, isPlaying) {
                     while (isActive) {
                         val posSec = exoPlayer.currentPosition / 1000f
                         currentPlayheadSec = posSec
-                        if (isPlaying && posSec >= range.endInclusive) {
-                            exoPlayer.seekTo((range.start * 1000f).toLong())
+                        if (isPlaying && (posSec >= absEndSec || posSec < absStartSec - 0.5f)) {
+                            exoPlayer.seekTo((absStartSec * 1000f).toLong())
                         }
-                        delay(80)
+                        delay(50)
                     }
                 }
 
@@ -169,32 +188,40 @@ class TrimVideoActivity : AppCompatActivity() {
                     onDispose {
                         exoPlayer.stop()
                         exoPlayer.release()
-                        FFmpegKitConfig.enableStatisticsCallback(null)
-                        FFmpegKitConfig.clearSessions()
                     }
                 }
 
-                LaunchedEffect(videoUri) {
+                // Extract filmstrip frames specifically for the active 30s window (debounced while scrubbing)
+                LaunchedEffect(videoUri, windowStartSec, windowSpanSec) {
+                    if (frames.isNotEmpty()) {
+                        delay(180)
+                    }
                     frames = withContext(Dispatchers.IO) {
-                        extractFrames(videoUri, durationSec)
+                        extractWindowFrames(videoUri, windowStartSec, windowSpanSec)
                     }
                 }
 
-                fun processAndOpenPreview(useFullVideo: Boolean) {
+                fun processAndOpenPreview(useFullShortVideo: Boolean) {
                     if (isProcessing) return
-                    val coversFullClip = useFullVideo ||
-                        (range.start <= 0.15f && (durationSec - range.endInclusive) <= 0.25f)
+                    val allowFullVerbatim = !isLongVideo && (
+                        useFullShortVideo ||
+                            (absStartSec <= 0.15f && (durationSec - absEndSec) <= 0.25f)
+                        )
 
-                    val startSec = if (coversFullClip) null else range.start.coerceAtLeast(0f)
-                    val clipDuration = if (coversFullClip) null else (range.endInclusive - range.start).coerceIn(1f, 30f)
+                    val startSec = if (allowFullVerbatim) null else absStartSec.coerceAtLeast(0f)
+                    val clipDuration = if (allowFullVerbatim) {
+                        null
+                    } else {
+                        (absEndSec - absStartSec).coerceIn(1f, MAX_CLIP_DURATION_SEC)
+                    }
 
-                    processingLabel = when {
-                        coversFullClip && meta.isMp4 -> "Copying lossless MP4..."
-                        !coversFullClip && meta.isMp4 -> "Lossless stream-copy trim..."
-                        else -> "Converting hardware MP4 (<= 30fps)..."
+                    processingLabel = if (allowFullVerbatim) {
+                        "Saving untouched original..."
+                    } else {
+                        "Saving lossless ${"%.1f".format(Locale.US, clipDuration ?: 0f)}s clip..."
                     }
                     isProcessing = true
-                    progressFraction = 0.08f
+                    progressFraction = 0.10f
                     exoPlayer.pause()
 
                     scope.launch(Dispatchers.IO) {
@@ -221,18 +248,18 @@ class TrimVideoActivity : AppCompatActivity() {
                                 } else {
                                     Toast.makeText(
                                         this@TrimVideoActivity,
-                                        "Could not process this video",
+                                        "Could not trim this video",
                                         Toast.LENGTH_SHORT,
                                     ).show()
                                 }
                             }
                         } catch (e: Exception) {
-                            UHLog.e("video", "Trim process exception: ${e.message}")
+                            UHLog.e("video", "Trim import exception: ${e.message}")
                             withContext(Dispatchers.Main) {
                                 isProcessing = false
                                 Toast.makeText(
                                     this@TrimVideoActivity,
-                                    "Error processing video",
+                                    "Error trimming video",
                                     Toast.LENGTH_SHORT,
                                 ).show()
                             }
@@ -268,15 +295,17 @@ class TrimVideoActivity : AppCompatActivity() {
                                 WallpaperVideoSurface(
                                     exoPlayer = exoPlayer,
                                     contentScale = ContentScale.Fit,
-                                    capTo30Fps = true,
+                                    initialVideoWidth = meta.width,
+                                    initialVideoHeight = meta.height,
+                                    initialRotationDegrees = meta.rotationDegrees,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 PlayPauseBadge(isPlaying = isPlaying, modifier = Modifier.align(Alignment.Center))
                                 TopBarControls(
                                     onClose = { finish() },
-                                    selectedDurationSec = (range.endInclusive - range.start).coerceAtLeast(1f),
+                                    selectedDurationSec = (absEndSec - absStartSec).coerceAtLeast(1f),
                                     srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "Video",
-                                    onTrimAndUse = { processAndOpenPreview(useFullVideo = false) },
+                                    onTrimAndUse = { processAndOpenPreview(useFullShortVideo = false) },
                                     isProcessing = isProcessing,
                                     modifier = Modifier
                                         .align(Alignment.TopCenter)
@@ -286,28 +315,35 @@ class TrimVideoActivity : AppCompatActivity() {
                             }
 
                             TrimControlsPanel(
-                                range = range,
-                                durationSec = durationSec,
-                                maxWindow = maxClipWindow,
+                                localRange = localRange,
+                                windowStartSec = windowStartSec,
+                                windowSpanSec = windowSpanSec,
+                                totalDurationSec = durationSec,
+                                maxWindowStartSec = maxWindowStartSec,
+                                isLongVideo = isLongVideo,
                                 currentPlayheadSec = currentPlayheadSec,
                                 frames = frames,
                                 isPlaying = isPlaying,
-                                isMp4FastPath = meta.isMp4,
                                 onTogglePlay = {
                                     isPlaying = !isPlaying
                                     if (isPlaying) exoPlayer.play() else exoPlayer.pause()
                                 },
-                                onRangeChange = { updated ->
-                                    range = updated
-                                    exoPlayer.seekTo((updated.start * 1000f).toLong())
+                                onWindowStartChange = { newStart ->
+                                    windowStartSec = newStart.coerceIn(0f, maxWindowStartSec)
+                                    exoPlayer.seekTo(((windowStartSec + localRange.start) * 1000f).toLong())
+                                },
+                                onLocalRangeChange = { updated ->
+                                    localRange = updated
+                                    exoPlayer.seekTo(((windowStartSec + updated.start) * 1000f).toLong())
                                 },
                                 onPresetDuration = { sec ->
-                                    val end = min(durationSec, range.start + sec)
-                                    val start = (end - sec).coerceAtLeast(0f)
-                                    range = start..end
-                                    exoPlayer.seekTo((start * 1000f).toLong())
+                                    val targetLen = min(windowSpanSec, sec)
+                                    val end = min(windowSpanSec, localRange.start + targetLen)
+                                    val start = (end - targetLen).coerceAtLeast(0f)
+                                    localRange = start..end
+                                    exoPlayer.seekTo(((windowStartSec + start) * 1000f).toLong())
                                 },
-                                onUseFullVideo = { processAndOpenPreview(useFullVideo = true) },
+                                onUseFullVideo = { processAndOpenPreview(useFullShortVideo = true) },
                                 isProcessing = isProcessing,
                                 modifier = Modifier
                                     .weight(1f)
@@ -323,9 +359,9 @@ class TrimVideoActivity : AppCompatActivity() {
                         ) {
                             TopBarControls(
                                 onClose = { finish() },
-                                selectedDurationSec = (range.endInclusive - range.start).coerceAtLeast(1f),
+                                selectedDurationSec = (absEndSec - absStartSec).coerceAtLeast(1f),
                                 srcMeta = if (meta.width > 0) "${meta.width}x${meta.height}" else "Video",
-                                onTrimAndUse = { processAndOpenPreview(useFullVideo = false) },
+                                onTrimAndUse = { processAndOpenPreview(useFullShortVideo = false) },
                                 isProcessing = isProcessing,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -347,7 +383,9 @@ class TrimVideoActivity : AppCompatActivity() {
                                 WallpaperVideoSurface(
                                     exoPlayer = exoPlayer,
                                     contentScale = ContentScale.Fit,
-                                    capTo30Fps = true,
+                                    initialVideoWidth = meta.width,
+                                    initialVideoHeight = meta.height,
+                                    initialRotationDegrees = meta.rotationDegrees,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 PlayPauseBadge(isPlaying = isPlaying, modifier = Modifier.align(Alignment.Center))
@@ -356,28 +394,35 @@ class TrimVideoActivity : AppCompatActivity() {
                             Spacer(modifier = Modifier.height(10.dp))
 
                             TrimControlsPanel(
-                                range = range,
-                                durationSec = durationSec,
-                                maxWindow = maxClipWindow,
+                                localRange = localRange,
+                                windowStartSec = windowStartSec,
+                                windowSpanSec = windowSpanSec,
+                                totalDurationSec = durationSec,
+                                maxWindowStartSec = maxWindowStartSec,
+                                isLongVideo = isLongVideo,
                                 currentPlayheadSec = currentPlayheadSec,
                                 frames = frames,
                                 isPlaying = isPlaying,
-                                isMp4FastPath = meta.isMp4,
                                 onTogglePlay = {
                                     isPlaying = !isPlaying
                                     if (isPlaying) exoPlayer.play() else exoPlayer.pause()
                                 },
-                                onRangeChange = { updated ->
-                                    range = updated
-                                    exoPlayer.seekTo((updated.start * 1000f).toLong())
+                                onWindowStartChange = { newStart ->
+                                    windowStartSec = newStart.coerceIn(0f, maxWindowStartSec)
+                                    exoPlayer.seekTo(((windowStartSec + localRange.start) * 1000f).toLong())
+                                },
+                                onLocalRangeChange = { updated ->
+                                    localRange = updated
+                                    exoPlayer.seekTo(((windowStartSec + updated.start) * 1000f).toLong())
                                 },
                                 onPresetDuration = { sec ->
-                                    val end = min(durationSec, range.start + sec)
-                                    val start = (end - sec).coerceAtLeast(0f)
-                                    range = start..end
-                                    exoPlayer.seekTo((start * 1000f).toLong())
+                                    val targetLen = min(windowSpanSec, sec)
+                                    val end = min(windowSpanSec, localRange.start + targetLen)
+                                    val start = (end - targetLen).coerceAtLeast(0f)
+                                    localRange = start..end
+                                    exoPlayer.seekTo(((windowStartSec + start) * 1000f).toLong())
                                 },
-                                onUseFullVideo = { processAndOpenPreview(useFullVideo = true) },
+                                onUseFullVideo = { processAndOpenPreview(useFullShortVideo = true) },
                                 isProcessing = isProcessing,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -414,7 +459,7 @@ class TrimVideoActivity : AppCompatActivity() {
                                     )
                                     Spacer(modifier = Modifier.height(14.dp))
                                     Text(
-                                        text = "Preparing Motion Wallpaper",
+                                        text = "Saving Motion Wallpaper",
                                         color = Color.White,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.SemiBold,
@@ -445,32 +490,30 @@ class TrimVideoActivity : AppCompatActivity() {
     }
 
     private fun readVideoMeta(uri: Uri): VideoMeta {
-        val ext = WallpaperMediaProcessor.guessVideoExtensionFromUri(this, uri)
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(this, uri)
             val durMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
             val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            val mime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE).orEmpty().lowercase()
-            val isMp4 = mime.contains("mp4") || mime.contains("m4v") || ext == "mp4" || ext == "m4v"
-            VideoMeta((durMs / 1000f).coerceAtLeast(1f), w, h, isMp4)
+            val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            VideoMeta((durMs / 1000f).coerceAtLeast(1f), w, h, rot)
         } catch (_: Exception) {
-            VideoMeta(15f, 0, 0, ext == "mp4" || ext == "m4v")
+            VideoMeta(15f, 0, 0, 0)
         } finally {
             try { retriever.release() } catch (_: Exception) {}
         }
     }
 
-    private fun extractFrames(uri: Uri, duration: Float): List<Bitmap> {
+    private fun extractWindowFrames(uri: Uri, windowStartSec: Float, windowSpanSec: Float): List<Bitmap> {
         val frames = mutableListOf<Bitmap>()
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(this, uri)
             val numFrames = 12
-            val interval = (duration / numFrames).coerceAtLeast(0.25f)
+            val interval = (windowSpanSec / numFrames).coerceAtLeast(0.25f)
             for (i in 0 until numFrames) {
-                val timeUs = (i * interval * 1_000_000).toLong()
+                val timeUs = ((windowStartSec + i * interval) * 1_000_000f).toLong().coerceAtLeast(0L)
                 val bmp = retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 144, 144)
                 if (bmp != null) frames.add(bmp)
             }
@@ -568,21 +611,27 @@ private fun TopBarControls(
 
 @Composable
 private fun TrimControlsPanel(
-    range: ClosedFloatingPointRange<Float>,
-    durationSec: Float,
-    maxWindow: Float,
+    localRange: ClosedFloatingPointRange<Float>,
+    windowStartSec: Float,
+    windowSpanSec: Float,
+    totalDurationSec: Float,
+    maxWindowStartSec: Float,
+    isLongVideo: Boolean,
     currentPlayheadSec: Float,
     frames: List<Bitmap>,
     isPlaying: Boolean,
-    isMp4FastPath: Boolean,
     onTogglePlay: () -> Unit,
-    onRangeChange: (ClosedFloatingPointRange<Float>) -> Unit,
+    onWindowStartChange: (Float) -> Unit,
+    onLocalRangeChange: (ClosedFloatingPointRange<Float>) -> Unit,
     onPresetDuration: (Float) -> Unit,
     onUseFullVideo: () -> Unit,
     isProcessing: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val primary = MaterialTheme.colorScheme.primary
+    val absStart = windowStartSec + localRange.start
+    val absEnd = (windowStartSec + localRange.endInclusive).coerceAtMost(totalDurationSec)
+
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(20.dp),
@@ -591,8 +640,9 @@ private fun TrimControlsPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -621,17 +671,13 @@ private fun TrimControlsPanel(
                     }
                     Column {
                         Text(
-                            text = "${formatSec(range.start)}  —  ${formatSec(range.endInclusive)}",
+                            text = "${formatTime(absStart)}  —  ${formatTime(absEnd)}",
                             color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = if (isMp4FastPath) {
-                                "MP4 lossless fast-path • 30fps playback cap"
-                            } else {
-                                "Native resolution HW MP4 • Capped at 30fps"
-                            },
+                            text = "Saves trimmed clip only • Lossless original quality",
                             color = Color.White.copy(alpha = 0.58f),
                             fontSize = 11.sp,
                         )
@@ -639,7 +685,41 @@ private fun TrimControlsPanel(
                 }
             }
 
-            // Frame Strip + Active Trim Overlay + Live Playhead
+            // Separate full-video timeline window scrubber ONLY for videos longer than 30s
+            if (isLongVideo && maxWindowStartSec > 0.1f) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "30s Window: ${formatTime(windowStartSec, showTenths = false)} – ${formatTime(windowStartSec + windowSpanSec, showTenths = false)}",
+                            color = Color.White.copy(alpha = 0.78f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = "Total ${formatTime(totalDurationSec, showTenths = false)}",
+                            color = Color.White.copy(alpha = 0.52f),
+                            fontSize = 11.sp,
+                        )
+                    }
+                    Slider(
+                        value = windowStartSec.coerceIn(0f, maxWindowStartSec),
+                        onValueChange = onWindowStartChange,
+                        valueRange = 0f..maxWindowStartSec,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color.White.copy(alpha = 0.55f),
+                            inactiveTrackColor = Color.White.copy(alpha = 0.18f),
+                        ),
+                        modifier = Modifier.height(28.dp),
+                    )
+                }
+            }
+
+            // Full-width 30s (or exact duration if <= 30s) Frame Strip + Active Trim Overlay
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -663,10 +743,10 @@ private fun TrimControlsPanel(
                 }
 
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val safeDur = durationSec.coerceAtLeast(1f)
-                    val startFrac = (range.start / safeDur).coerceIn(0f, 1f)
-                    val endFrac = (range.endInclusive / safeDur).coerceIn(startFrac, 1f)
-                    val playFrac = (currentPlayheadSec / safeDur).coerceIn(0f, 1f)
+                    val safeSpan = windowSpanSec.coerceAtLeast(1f)
+                    val startFrac = (localRange.start / safeSpan).coerceIn(0f, 1f)
+                    val endFrac = (localRange.endInclusive / safeSpan).coerceIn(startFrac, 1f)
+                    val playFrac = ((currentPlayheadSec - windowStartSec) / safeSpan).coerceIn(0f, 1f)
 
                     val startX = size.width * startFrac
                     val endX = size.width * endFrac
@@ -699,20 +779,19 @@ private fun TrimControlsPanel(
                 }
             }
 
+            // Zoomed Trim RangeSlider strictly bounded to 0..windowSpanSec (<= 30s)
             RangeSlider(
-                value = range,
+                value = localRange,
                 onValueChange = { updated ->
-                    var s = updated.start
-                    var e = updated.endInclusive
-                    if (e - s < 1f) e = min(durationSec, s + 1f)
-                    if (e - s > maxWindow) e = s + maxWindow
-                    if (e > durationSec) {
-                        e = durationSec
-                        s = (e - maxWindow).coerceAtLeast(0f)
+                    var s = updated.start.coerceIn(0f, windowSpanSec)
+                    var e = updated.endInclusive.coerceIn(0f, windowSpanSec)
+                    if (e - s < 1f) {
+                        e = min(windowSpanSec, s + 1f)
+                        s = (e - 1f).coerceAtLeast(0f)
                     }
-                    onRangeChange(s..e)
+                    onLocalRangeChange(s..e)
                 },
-                valueRange = 0f..durationSec,
+                valueRange = 0f..windowSpanSec,
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White,
                     activeTrackColor = primary,
@@ -726,8 +805,8 @@ private fun TrimControlsPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 listOf(5f to "5s", 10f to "10s", 15f to "15s", 30f to "30s").forEach { (sec, label) ->
-                    val enabled = durationSec >= sec - 0.5f || label == "5s"
-                    val isSelected = kotlin.math.abs((range.endInclusive - range.start) - min(durationSec, sec)) < 0.8f
+                    val enabled = windowSpanSec >= sec - 0.5f || label == "5s"
+                    val isSelected = abs((localRange.endInclusive - localRange.start) - min(windowSpanSec, sec)) < 0.8f
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = if (isSelected) primary.copy(alpha = 0.26f) else Color.White.copy(alpha = 0.08f),
@@ -751,33 +830,39 @@ private fun TrimControlsPanel(
                 }
             }
 
-            // One-tap bypass to skip trimming and import the full video losslessly
-            OutlinedButton(
-                enabled = !isProcessing,
-                onClick = onUseFullVideo,
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = if (isMp4FastPath) {
-                        "Use Full Video (${formatSec(durationSec)} • Instant)"
-                    } else {
-                        "Use Full Video (${formatSec(durationSec)})"
-                    },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                )
+            // Only allow Use Full Video when total duration is <= 30s (enforces 30s max saved clip)
+            if (!isLongVideo) {
+                OutlinedButton(
+                    enabled = !isProcessing,
+                    onClick = onUseFullVideo,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "Use Full Video (${formatTime(totalDurationSec)} • Instant)",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
     }
 }
 
-private fun formatSec(sec: Float): String {
+private fun formatTime(sec: Float, showTenths: Boolean = true): String {
     val totalTenths = (sec * 10).toInt().coerceAtLeast(0)
-    val mins = (totalTenths / 10) / 60
-    val remSec = (totalTenths / 10) % 60
+    val totalWholeSec = totalTenths / 10
+    val hours = totalWholeSec / 3600
+    val mins = (totalWholeSec % 3600) / 60
+    val remSec = totalWholeSec % 60
     val tenths = totalTenths % 10
-    return String.format(Locale.US, "%d:%02d.%d", mins, remSec, tenths)
+    return if (hours > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hours, mins, remSec)
+    } else if (showTenths) {
+        String.format(Locale.US, "%d:%02d.%d", mins, remSec, tenths)
+    } else {
+        String.format(Locale.US, "%d:%02d", mins, remSec)
+    }
 }

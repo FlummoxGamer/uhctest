@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import androidx.core.graphics.ColorUtils
+import app.harvester.companion.wallpaper.VideoClipBounds
 import app.harvester.companion.wallpaper.WallpaperCatalog
 import app.harvester.companion.wallpaper.WallpaperMediaCache
 import app.harvester.companion.wallpaper.WallpaperMediaProcessor
@@ -37,9 +38,11 @@ object WallpaperStore {
     private const val KEY_ZOOM_LANDSCAPE = "wallpaper_zoom_landscape"
     private const val KEY_PAN_X_LANDSCAPE = "wallpaper_pan_x_landscape"
     private const val KEY_PAN_Y_LANDSCAPE = "wallpaper_pan_y_landscape"
+    private const val KEY_RECENTS_ORDER = "wallpaper_recents_order"
+    private const val KEY_CLIP_BOUNDS_PREFIX = "video_clip_"
 
-    private const val MAX_RECENT_ITEMS = 20
-    private const val MAX_NON_ACTIVE_STORAGE_BYTES = 350L * 1024L * 1024L
+    const val MAX_RECENT_ITEMS = 30
+    private const val MAX_NON_ACTIVE_STORAGE_BYTES = 600L * 1024L * 1024L
     const val MAX_DIM_ALPHA = 0.65f
 
     data class WallpaperState(
@@ -52,6 +55,7 @@ object WallpaperStore {
         val isBottomDark: Boolean? = null,
         val portraitTransform: WallpaperTransform = WallpaperTransform.Identity,
         val landscapeTransform: WallpaperTransform = WallpaperTransform.Identity,
+        val clipBounds: VideoClipBounds? = null,
     )
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -121,6 +125,7 @@ object WallpaperStore {
             isBottomDark = when (bottomInt) { 1 -> true; 0 -> false; else -> null },
             portraitTransform = readTransform(prefs, isLandscape = false),
             landscapeTransform = readTransform(prefs, isLandscape = true),
+            clipBounds = if (hasCustom && isVideo) getVideoClipBounds(ctx, path) else null,
         )
     }
 
@@ -161,18 +166,87 @@ object WallpaperStore {
             lower.endsWith(".mov") ||
             lower.endsWith(".m4v") ||
             lower.endsWith(".3gp") ||
+            lower.endsWith(".avi") ||
             File(value).name.startsWith("motion_")
+    }
+
+    // -------------------------------------------------------------------------
+    // Non-destructive video trim clip bounds
+    // -------------------------------------------------------------------------
+
+    fun setVideoClipBounds(ctx: Context, videoPath: String, bounds: VideoClipBounds?) {
+        val name = File(videoPath).name
+        if (name.isBlank()) return
+        val key = KEY_CLIP_BOUNDS_PREFIX + name
+        val editor = getPrefs(ctx).edit()
+        if (bounds != null && bounds.isValid) {
+            editor.putString(key, "${bounds.startMs}:${bounds.endMs}")
+        } else {
+            editor.remove(key)
+        }
+        editor.apply()
+
+        val prev = _stateFlow.value
+        if (prev != null && prev.path == videoPath) {
+            _stateFlow.value = prev.copy(clipBounds = bounds?.takeIf { it.isValid })
+        }
+    }
+
+    fun getVideoClipBounds(ctx: Context, videoPath: String?): VideoClipBounds? {
+        if (videoPath.isNullOrBlank() || videoPath.startsWith("http")) return null
+        val name = File(videoPath).name
+        if (name.isBlank()) return null
+        val raw = getPrefs(ctx).getString(KEY_CLIP_BOUNDS_PREFIX + name, null) ?: return null
+        val parts = raw.split(":")
+        if (parts.size != 2) return null
+        val startMs = parts[0].toLongOrNull() ?: return null
+        val endMs = parts[1].toLongOrNull() ?: return null
+        return VideoClipBounds(startMs, endMs).takeIf { it.isValid }
+    }
+
+    // -------------------------------------------------------------------------
+    // Persisted Recents ordering (supports drag-and-drop reordering)
+    // -------------------------------------------------------------------------
+
+    private fun readSavedOrder(ctx: Context): List<String> {
+        val raw = getPrefs(ctx).getString(KEY_RECENTS_ORDER, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return raw.split('\n').filter { it.isNotBlank() }
+    }
+
+    private fun writeSavedOrder(ctx: Context, fileNames: List<String>) {
+        val distinct = fileNames.filter { it.isNotBlank() }.distinct().take(MAX_RECENT_ITEMS * 2)
+        getPrefs(ctx).edit().putString(KEY_RECENTS_ORDER, distinct.joinToString("\n")).apply()
+    }
+
+    private fun prependToRecentOrder(ctx: Context, fileName: String) {
+        val current = readSavedOrder(ctx).toMutableList()
+        current.remove(fileName)
+        current.add(0, fileName)
+        writeSavedOrder(ctx, current)
+    }
+
+    private fun removeFromRecentOrder(ctx: Context, fileName: String) {
+        val current = readSavedOrder(ctx).toMutableList()
+        if (current.remove(fileName)) {
+            writeSavedOrder(ctx, current)
+        }
+    }
+
+    fun saveRecentOrder(ctx: Context, orderedPaths: List<String>) {
+        writeSavedOrder(ctx, orderedPaths.map { File(it).name })
     }
 
     /**
      * Lossless local image import — keeps original file verbatim (zero compression, zero downscale),
-     * deduplicates by content hash, and updates recency timestamp on duplicates.
+     * deduplicates by content hash, and places it at the top of Recents.
      */
     fun saveWallpaper(ctx: Context, uri: Uri): String? {
         return try {
             val destFile = WallpaperMediaProcessor.importLocalImageLossless(ctx, uri, getWallpaperDir(ctx))
                 ?: return null
             val canonical = dedupeWallpapers(ctx, destFile, "wall_")
+            prependToRecentOrder(ctx, canonical.name)
             cleanOldWallpapers(ctx)
             canonical.absolutePath
         } catch (e: Exception) {
@@ -182,11 +256,12 @@ object WallpaperStore {
     }
 
     /**
-     * Single-pass local video import:
-     * - Full MP4: skips FFmpeg completely (instant direct copy).
-     * - Trimmed MP4: lossless stream-copy trim (< 1s).
-     * - Non-MP4: hardware MediaCodec high-bitrate conversion capped at <= 30fps.
-     * Also deduplicates videos by content hash so re-importing the same clip does not waste storage.
+     * Zero-reencode local video import:
+     * - When trimmed ([startSec] and [durationSec] provided): losslessly extracts ONLY the
+     *   trimmed slice directly from [uri] via native MediaExtractor + MediaMuxer (never copies
+     *   a full 1-hour video, zero re-encoding, zero quality drop) and stores only any small
+     *   sub-GOP fine clip bounds if the nearest keyframe preceded [startSec].
+     * - When full video (<= 30s): copies the exact original file verbatim untouched.
      */
     fun saveLocalVideo(
         ctx: Context,
@@ -196,17 +271,41 @@ object WallpaperStore {
         onProgress: ((Float) -> Unit)? = null,
     ): String? {
         return try {
-            val destFile = WallpaperMediaProcessor.importLocalVideo(
-                ctx = ctx,
-                uri = uri,
-                destDir = getWallpaperDir(ctx),
-                startSec = startSec,
-                durationSec = durationSec,
-                onProgress = onProgress,
-            ) ?: return null
+            val isTrimmed = startSec != null && durationSec != null && durationSec >= 0.5f
+            val destFile: File
+            val fineClipBounds: VideoClipBounds?
+
+            if (isTrimmed) {
+                val sMs = (startSec!! * 1000f).toLong().coerceAtLeast(0L)
+                val eMs = ((startSec + durationSec!!) * 1000f).toLong().coerceAtLeast(sMs + 500L)
+                val trimmed = WallpaperMediaProcessor.importLocalVideoTrimmedLossless(
+                    ctx = ctx,
+                    uri = uri,
+                    destDir = getWallpaperDir(ctx),
+                    startMs = sMs,
+                    endMs = eMs,
+                    onProgress = onProgress,
+                ) ?: return null
+                destFile = trimmed.file
+                fineClipBounds = trimmed.fineClipBounds
+            } else {
+                destFile = WallpaperMediaProcessor.importLocalVideoVerbatim(
+                    ctx = ctx,
+                    uri = uri,
+                    destDir = getWallpaperDir(ctx),
+                    onProgress = onProgress,
+                ) ?: return null
+                fineClipBounds = null
+            }
 
             val canonical = dedupeWallpapers(ctx, destFile, "motion_")
-            ensureVideoPoster(canonical.absolutePath)
+            setVideoClipBounds(ctx, canonical.absolutePath, fineClipBounds)
+            ensureVideoPoster(
+                videoPath = canonical.absolutePath,
+                timeMs = fineClipBounds?.startMs ?: 0L,
+                forceRegenerate = isTrimmed,
+            )
+            prependToRecentOrder(ctx, canonical.name)
             cleanOldWallpapers(ctx)
             canonical.absolutePath
         } catch (e: Exception) {
@@ -217,7 +316,7 @@ object WallpaperStore {
 
     /**
      * Downloads or promotes a cached remote wallpaper at maximum screen resolution without
-     * lossy re-compression or slow MP4 re-encoding.
+     * lossy re-compression or video re-encoding.
      */
     suspend fun downloadAndPrepareWallpaper(ctx: Context, rawUrl: String): String? =
         withContext(Dispatchers.IO) {
@@ -229,6 +328,7 @@ object WallpaperStore {
                 // 1. Reuse already-saved wallpaper in permanent storage if present
                 findExistingByHash(dir, hash)?.let { existing ->
                     existing.setLastModified(System.currentTimeMillis())
+                    prependToRecentOrder(ctx, existing.name)
                     if (isVideoFileOrUrl(existing.absolutePath)) {
                         ensureVideoPoster(existing.absolutePath)
                     }
@@ -237,21 +337,20 @@ object WallpaperStore {
 
                 val expectVideo = isVideoFileOrUrl(rawUrl)
                 if (expectVideo) {
-                    // 2a. Reuse single-flight preview cache (zero duplicate network download!)
                     val cachedVideo = WallpaperMediaCache.getOrDownloadVideo(ctx, resolvedUrl)
                         ?: return@withContext null
-                    val targetMp4 = File(dir, "motion_$hash.mp4")
-                    val ok = WallpaperMediaProcessor.prepareMotionVideo(
-                        ctx = ctx,
-                        inputFile = cachedVideo,
-                        outputFile = targetMp4,
+                    val finalVideo = WallpaperMediaProcessor.finalizeRemoteVideoVerbatim(
+                        srcFile = cachedVideo,
+                        destDir = dir,
+                        hash = hash,
+                        url = resolvedUrl,
                     )
-                    if (ok && targetMp4.exists() && targetMp4.length() > 1024L) {
-                        ensureVideoPoster(targetMp4.absolutePath)
+                    if (finalVideo != null) {
+                        ensureVideoPoster(finalVideo.absolutePath)
+                        prependToRecentOrder(ctx, finalVideo.name)
                         cleanOldWallpapers(ctx)
-                        return@withContext targetMp4.absolutePath
+                        return@withContext finalVideo.absolutePath
                     }
-                    targetMp4.delete()
                     return@withContext null
                 }
 
@@ -269,17 +368,20 @@ object WallpaperStore {
                     return@withContext null
                 }
 
-                // Detect unexpected video payload vs. lossless image finalization
                 if (WallpaperMediaProcessor.hasVideoMagicBytes(tmpImage)) {
-                    val targetMp4 = File(dir, "motion_$hash.mp4")
-                    val ok = WallpaperMediaProcessor.prepareMotionVideo(ctx, tmpImage, targetMp4)
+                    val finalVideo = WallpaperMediaProcessor.finalizeRemoteVideoVerbatim(
+                        srcFile = tmpImage,
+                        destDir = dir,
+                        hash = hash,
+                        url = resolvedUrl,
+                    )
                     tmpImage.delete()
-                    if (ok && targetMp4.exists() && targetMp4.length() > 1024L) {
-                        ensureVideoPoster(targetMp4.absolutePath)
+                    if (finalVideo != null) {
+                        ensureVideoPoster(finalVideo.absolutePath)
+                        prependToRecentOrder(ctx, finalVideo.name)
                         cleanOldWallpapers(ctx)
-                        return@withContext targetMp4.absolutePath
+                        return@withContext finalVideo.absolutePath
                     }
-                    targetMp4.delete()
                     return@withContext null
                 }
 
@@ -291,6 +393,7 @@ object WallpaperStore {
                 )
                 tmpImage.delete()
                 if (finalImg != null) {
+                    prependToRecentOrder(ctx, finalImg.name)
                     cleanOldWallpapers(ctx)
                     finalImg.absolutePath
                 } else {
@@ -303,11 +406,9 @@ object WallpaperStore {
         }
 
     private fun findExistingByHash(dir: File, hash: String): File? {
-        val existingVideo = File(dir, "motion_$hash.mp4")
-        if (existingVideo.exists() && existingVideo.length() > 1024L) return existingVideo
         return dir.listFiles { f ->
             f.isFile &&
-                f.name.startsWith("wall_$hash.") &&
+                (f.name.startsWith("motion_$hash.") || f.name.startsWith("wall_$hash.")) &&
                 !f.name.endsWith(".poster.webp") &&
                 f.length() > 128L
         }?.firstOrNull()
@@ -320,13 +421,13 @@ object WallpaperStore {
         if (!state.sourceUrl.isNullOrBlank() && state.sourceUrl == canonical) return true
         val hash = WallpaperMediaCache.urlHash(rawUrl)
         val activeName = File(activePath).name
-        return activeName == "motion_$hash.mp4" || activeName.startsWith("wall_$hash.")
+        return activeName.startsWith("motion_$hash.") || activeName.startsWith("wall_$hash.")
     }
 
-    fun ensureVideoPoster(videoPath: String) {
+    fun ensureVideoPoster(videoPath: String, timeMs: Long = 0L, forceRegenerate: Boolean = false) {
         val poster = posterFileFor(videoPath)
-        if (poster.exists() && poster.length() > 256L) return
-        val thumb = WallpaperMediaProcessor.generateVideoPosterBitmap(videoPath) ?: return
+        if (!forceRegenerate && poster.exists() && poster.length() > 256L) return
+        val thumb = WallpaperMediaProcessor.generateVideoPosterBitmap(videoPath, timeMs) ?: return
         try {
             poster.outputStream().use { out ->
                 thumb.compress(WallpaperMediaProcessor.webpPosterFormat(), 95, out)
@@ -337,13 +438,11 @@ object WallpaperStore {
         }
     }
 
-    fun generateVideoThumbnail(videoPath: String): Bitmap? =
-        WallpaperMediaProcessor.generateVideoPosterBitmap(videoPath)
+    fun generateVideoThumbnail(videoPath: String, timeMs: Long = 0L): Bitmap? =
+        WallpaperMediaProcessor.generateVideoPosterBitmap(videoPath, timeMs)
 
     /**
-     * Deduplicates both static and motion wallpapers using size + head/tail content fingerprint.
-     * If a matching file already exists, updates its timestamp so it surfaces at the top of Recents
-     * and deletes the newly written duplicate.
+     * Deduplicates both static and motion wallpapers using size + head/mid/tail content fingerprint.
      */
     private fun dedupeWallpapers(ctx: Context, newest: File, prefix: String): File {
         val hash = getFastContentFingerprint(newest)
@@ -400,28 +499,33 @@ object WallpaperStore {
                 !f.name.endsWith(".poster.webp")
         } ?: return
 
-        val sortedOldestFirst = files.sortedBy { it.lastModified() }
-        val nonActive = sortedOldestFirst.filter { it.absolutePath != currentPath }.toMutableList()
+        val ordered = orderWallpaperFiles(ctx, files.toList())
+        // Evict from the tail (least-recent / bottom of custom order) while never deleting active
+        val nonActiveTailFirst = ordered.reversed().filter { it.absolutePath != currentPath }.toMutableList()
 
-        // 1. Enforce max recent count (never delete active wallpaper)
+        // 1. Enforce max 30 recent items
         var currentCount = files.size
-        val iter = nonActive.iterator()
+        val iter = nonActiveTailFirst.iterator()
         while (currentCount > MAX_RECENT_ITEMS && iter.hasNext()) {
             val victim = iter.next()
             victim.delete()
             posterFileFor(victim.absolutePath).delete()
+            setVideoClipBounds(ctx, victim.absolutePath, null)
+            removeFromRecentOrder(ctx, victim.name)
             iter.remove()
             currentCount--
         }
 
-        // 2. Enforce non-active storage budget so uncompressed 4K videos don't bloat disk forever
-        var nonActiveBytes = nonActive.sumOf { it.length() }
-        val sizeIter = nonActive.iterator()
+        // 2. Enforce non-active storage budget so large uncompressed 4K clips don't bloat disk forever
+        var nonActiveBytes = nonActiveTailFirst.sumOf { it.length() }
+        val sizeIter = nonActiveTailFirst.iterator()
         while (nonActiveBytes > MAX_NON_ACTIVE_STORAGE_BYTES && sizeIter.hasNext()) {
             val victim = sizeIter.next()
             val size = victim.length()
             victim.delete()
             posterFileFor(victim.absolutePath).delete()
+            setVideoClipBounds(ctx, victim.absolutePath, null)
+            removeFromRecentOrder(ctx, victim.name)
             nonActiveBytes -= size
             sizeIter.remove()
         }
@@ -431,6 +535,18 @@ object WallpaperStore {
             val parentVideo = File(poster.absolutePath.removeSuffix(".poster.webp"))
             if (!parentVideo.exists()) poster.delete()
         }
+    }
+
+    private fun orderWallpaperFiles(ctx: Context, files: List<File>): List<File> {
+        val savedOrder = readSavedOrder(ctx)
+        if (savedOrder.isEmpty()) {
+            return files.sortedByDescending { it.lastModified() }
+        }
+        val orderRank = savedOrder.withIndex().associate { (index, name) -> name to index }
+        val (tracked, untracked) = files.partition { orderRank.containsKey(it.name) }
+        val sortedUntracked = untracked.sortedByDescending { it.lastModified() }
+        val sortedTracked = tracked.sortedBy { orderRank[it.name] ?: Int.MAX_VALUE }
+        return sortedUntracked + sortedTracked
     }
 
     fun setCurrentWallpaper(
@@ -477,6 +593,7 @@ object WallpaperStore {
                 isBottomDark = null,
                 portraitTransform = WallpaperTransform.Identity,
                 landscapeTransform = WallpaperTransform.Identity,
+                clipBounds = null,
             )
             return
         }
@@ -495,6 +612,7 @@ object WallpaperStore {
 
         val portraitTransform = readTransform(prefs, isLandscape = false)
         val landscapeTransform = readTransform(prefs, isLandscape = true)
+        val activeClipBounds = if (isVideo) getVideoClipBounds(appCtx, path) else null
         _stateFlow.value = WallpaperState(
             path = path,
             sourceUrl = canonicalSource,
@@ -505,6 +623,7 @@ object WallpaperStore {
             isBottomDark = estDark,
             portraitTransform = portraitTransform,
             landscapeTransform = landscapeTransform,
+            clipBounds = activeClipBounds,
         )
 
         computeAndPersistLuminanceAsync(appCtx, path!!, isVideo, textColor, safeDim)
@@ -519,11 +638,12 @@ object WallpaperStore {
     ) {
         ioScope.launch {
             try {
-                if (isVideo) ensureVideoPoster(path)
+                val clipStart = if (isVideo) getVideoClipBounds(ctx, path)?.startMs ?: 0L else 0L
+                if (isVideo) ensureVideoPoster(path, clipStart)
                 val poster = if (isVideo) posterFileFor(path) else null
                 val bmp = when {
                     poster != null && poster.exists() -> getSampledBitmap(poster.absolutePath, 240, 420)
-                    isVideo -> generateVideoThumbnail(path)
+                    isVideo -> generateVideoThumbnail(path, clipStart)
                     else -> getSampledBitmap(path, 240, 420)
                 }
                 if (bmp != null) {
@@ -637,25 +757,29 @@ object WallpaperStore {
 
     fun getRecent(ctx: Context): List<String> {
         val dir = getWallpaperDir(ctx)
-        return dir.listFiles { file ->
+        val files = dir.listFiles { file ->
             file.isFile &&
                 (file.name.startsWith("wall_") || file.name.startsWith("motion_")) &&
                 !file.name.endsWith(".poster.webp")
-        }
-            ?.sortedByDescending { it.lastModified() }
-            ?.map { it.absolutePath }
-            ?.take(MAX_RECENT_ITEMS) ?: emptyList()
+        }?.toList() ?: return emptyList()
+
+        return orderWallpaperFiles(ctx, files)
+            .map { it.absolutePath }
+            .take(MAX_RECENT_ITEMS)
     }
 
     /**
-     * Deletes a wallpaper and its poster. If the deleted file is the currently active wallpaper,
+     * Deletes a wallpaper, its poster, clip bounds, and recent-order entry. If active,
      * immediately falls back cleanly to "default" so Home never renders a broken blank canvas.
      */
     fun deleteWallpaper(ctx: Context, path: String) {
         try {
             val isDeletingActive = getCurrentWallpaper(ctx) == path
-            File(path).delete()
+            val file = File(path)
+            file.delete()
             posterFileFor(path).delete()
+            setVideoClipBounds(ctx, path, null)
+            removeFromRecentOrder(ctx, file.name)
             if (isDeletingActive) {
                 setCurrentWallpaper(ctx, "default", 0, isVideo = false, sourceUrl = null, dimAlpha = 0f)
             }
@@ -679,6 +803,7 @@ object WallpaperStore {
                 isBottomDark = null,
                 portraitTransform = WallpaperTransform.Identity,
                 landscapeTransform = WallpaperTransform.Identity,
+                clipBounds = null,
             )
         } catch (_: Exception) {}
     }

@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -86,15 +87,21 @@ fun WallpaperTileGrid(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WallpaperGridTile(
+fun WallpaperGridTile(
     tile: HomeWallpaperTile,
     wallpaperState: WallpaperStore.WallpaperState,
     onClick: () -> Unit,
     onSetFromMenu: (String) -> Unit,
     onDeleteFromMenu: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    isDragging: Boolean = false,
+    enableInternalClick: Boolean = true,
+    externalMenuExpanded: Boolean? = null,
+    onExternalMenuDismiss: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    var showMenu by remember { mutableStateOf(false) }
+    var internalMenuExpanded by remember { mutableStateOf(false) }
+    val showMenu = externalMenuExpanded ?: internalMenuExpanded
 
     val activePath = wallpaperState.path ?: "default"
     val customPath = when (tile) {
@@ -117,22 +124,39 @@ private fun WallpaperGridTile(
         else -> false
     }
 
-    val borderColor = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-    val borderWidth = if (isActive) 2.5.dp else 1.dp
+    val borderColor = when {
+        isDragging -> MaterialTheme.colorScheme.primary
+        isActive -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outline
+    }
+    val borderWidth = if (isActive || isDragging) 2.5.dp else 1.dp
+
+    val clickableModifier = if (enableInternalClick) {
+        Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = if (customPath != null) {
+                { internalMenuExpanded = true }
+            } else null,
+        )
+    } else {
+        Modifier
+    }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(0.66f)
+            .graphicsLayer {
+                if (isDragging) {
+                    scaleX = 1.04f
+                    scaleY = 1.04f
+                    alpha = 0.94f
+                }
+            }
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(borderWidth, borderColor, RoundedCornerShape(14.dp))
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = if (customPath != null) {
-                    { showMenu = true }
-                } else null,
-            ),
+            .then(clickableModifier),
         contentAlignment = Alignment.Center,
     ) {
         when (tile) {
@@ -262,19 +286,24 @@ private fun WallpaperGridTile(
         if (customPath != null) {
             DropdownMenu(
                 expanded = showMenu,
-                onDismissRequest = { showMenu = false },
+                onDismissRequest = {
+                    internalMenuExpanded = false
+                    onExternalMenuDismiss?.invoke()
+                },
             ) {
                 DropdownMenuItem(
                     text = { Text("Set as Wallpaper") },
                     onClick = {
-                        showMenu = false
+                        internalMenuExpanded = false
+                        onExternalMenuDismiss?.invoke()
                         onSetFromMenu(customPath)
                     },
                 )
                 DropdownMenuItem(
                     text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                     onClick = {
-                        showMenu = false
+                        internalMenuExpanded = false
+                        onExternalMenuDismiss?.invoke()
                         onDeleteFromMenu(customPath)
                     },
                 )

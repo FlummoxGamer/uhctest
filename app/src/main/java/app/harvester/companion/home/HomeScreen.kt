@@ -138,6 +138,7 @@ fun HomeScreen(
             dimAlpha = wallpaperState.dimAlpha,
             portraitTransform = wallpaperState.portraitTransform,
             landscapeTransform = wallpaperState.landscapeTransform,
+            clipBounds = wallpaperState.clipBounds,
             isPlaybackActive = isWallpaperPlaybackActive,
         )
 
